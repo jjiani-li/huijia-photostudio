@@ -877,6 +877,16 @@
       "tickets": [
         "T19"
       ]
+    },
+    {
+      "id": "RN-04",
+      "layer": "B",
+      "owner": "modules/M08-账号历史与彻底删除.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T19"
+      ]
     }
   ]
 }

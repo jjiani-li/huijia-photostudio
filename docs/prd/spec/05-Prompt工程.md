@@ -178,7 +178,7 @@ buildPrompt(input: {
 
 F4 读一张旧照片，产出**一个可直接采纳的起点**：结构化描述 + 自然语言 prompt + 推荐的年代代号与场景 id。**该输出不写入 `identity_anchors`**——它不是身份锚点，只用于降低用户自己写 prompt 的门槛（见 `modules/M09-图片反推提示词.md`）。
 
-**模型与通道**：`doubao-seed-2-1-turbo-260628`，走 `POST /api/v3/chat/completions` + `image_url` 多模态通道（已实测可用，见 `docs/火山引擎接口文档.md` §3.1），与 `modules/M03-身份锚点提取.md` 复用同一条读图通路。
+**模型与通道**：`doubao-seed-2-1-turbo-260628`，走 `POST {ARK_BASE_URL}/chat/completions` + `image_url` 多模态通道（已实测可用，见 `docs/火山引擎接口文档.md` §3.1），与 `modules/M03-身份锚点提取.md` 复用同一条读图通路。
 
 **输出字段**（落 `prompt_reverse_jobs`，端点见 `spec/03-接口契约.md` §3.8）：
 

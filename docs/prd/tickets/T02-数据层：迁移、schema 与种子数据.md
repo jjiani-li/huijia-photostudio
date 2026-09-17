@@ -20,7 +20,7 @@
 | `migrations/001-init.sql` | 新建 | 与 `spec/02-schema.sql` 逐字符一致的首个迁移 | `spec/04-技术基线与目录结构.md` §2 |
 | `src/server/db/connection.ts`、`src/server/db/migrate.ts` | 新建 | `getDb()` 单例（`journal_mode=WAL`、`foreign_keys=OFF`）；按序执行迁移 + `schema_migrations` 记账 | `spec/04-技术基线与目录结构.md` §4.3 |
 | `src/server/db/seed.ts` | 新建 | 读 `spec/era-scene-seed.json` 幂等 upsert 三张配置表 + `DEV_USER` | `spec/08-本地开发指南.md` §2–§3.2 |
-| `src/server/db/repositories/*.ts` | 新建 | 11 个 repository 的骨架与函数签名 | `spec/04-技术基线与目录结构.md` §2 |
+| `src/server/db/repositories/*.ts` | 新建 | 12 个 repository 的骨架与函数签名 | `spec/04-技术基线与目录结构.md` §2 |
 
 ## 4. 实现要点
 1. 重复跑 `pnpm migrate` / `pnpm seed` 必须幂等；`seed` 结束断言 `eras=4`、`scenes=5`、`era_scene_profiles=20`，不符**非零退出**（`spec/08-本地开发指南.md` §2）。
