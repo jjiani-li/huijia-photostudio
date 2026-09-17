@@ -4,7 +4,40 @@
   "private": true,
   "description": "「回家照相馆」：旧照片面部特征锚点 → 年代 × 场景真实感重建（PRD 见 docs/prd/）",
   "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "worker": "tsx src/jobs/worker.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "check": "tsc --noEmit && eslint .",
     "check:docs": "node scripts/check-docs.mjs",
     "test:docs": "node --test scripts/check-docs.test.mjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.4.1",
+    "next": "^15.5.4",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "sharp": "^0.34.4",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.37.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.7.1",
+    "@types/react": "^19.1.9",
+    "@types/react-dom": "^19.1.7",
+    "autoprefixer": "^10.4.21",
+    "eslint": "^9.37.0",
+    "globals": "^17.12.0",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.18",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.46.0",
+    "vitest": "^3.2.4"
   }
 }

@@ -1,0 +1,6 @@
+# pnpm 设置（pnpm ≥ 10 不再从 package.json 的 "pnpm" 字段读取，见 https://pnpm.io/settings）。
+# 这三个依赖需要跑安装脚本才能拿到原生二进制；其余依赖一律不许跑安装脚本。
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+  sharp: true
