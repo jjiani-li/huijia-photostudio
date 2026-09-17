@@ -460,7 +460,7 @@ const COUNT_PATTERNS = [
   [/共 (\d+) 项是 A 层/, 'A'],
   [/全部 (\d+) 项/, 'B'],
   [/(\d+) 项全绿/, 'B'],
-  [/(\d+) passed/, 'B'],
+  [/(\d+) passed, 0 failed/, 'B'],
   [/共 \*?\*?(\d+) 个文件/, 'files'],
 ];
 for (const f of [...mdFiles, registryPath]) {

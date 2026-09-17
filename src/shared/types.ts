@@ -33,7 +33,7 @@ export type ErrorCode = (typeof ERROR_CODES)[number];
 export type Iso = string;
 
 /** 错误响应的统一 envelope（`docs/prd/spec/03-接口契约.md` §1.3）；成功响应不用 envelope。 */
-export interface ApiErrorBody {
+export interface ApiError {
   error: {
     code: ErrorCode;
     message: string;

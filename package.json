@@ -2,6 +2,10 @@
   "name": "huijia-photostudio",
   "version": "0.0.0",
   "private": true,
+  "engines": {
+    "node": ">=20.11",
+    "pnpm": ">=9"
+  },
   "description": "「回家照相馆」：旧照片面部特征锚点 → 年代 × 场景真实感重建（PRD 见 docs/prd/）",
   "scripts": {
     "dev": "next dev",

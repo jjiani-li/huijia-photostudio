@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { ZodError } from 'zod';
 import { AppError, ERROR_MESSAGE, ERROR_STATUS } from '../domain/errors';
+import { nowIso } from '../domain/time';
 import { invalidParam } from './validate';
 
 /** 成功响应不用 envelope，直接返回业务对象（`docs/prd/spec/03-接口契约.md` §1.4）。 */
@@ -38,7 +39,7 @@ export const withErrorHandling =
           method: req.method,
           path: req.nextUrl?.pathname ?? null,
           error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
-          at: new Date().toISOString(),
+          at: nowIso(),
         }),
       );
       return NextResponse.json(
