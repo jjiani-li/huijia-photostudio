@@ -21,7 +21,7 @@
 | `src/server/ark/real.ts` | 新建 | `RealArkProvider`：`chat/completions`（messages 组装见 §5.4）与 `images/generations` | `spec/08-本地开发指南.md` §5.2 |
 | `src/server/ark/mock.ts` | 新建 | `MockArkProvider`：fixture 回放、确定性选图、300–800ms sleep、未知场景抛 `PROVIDER_ERROR` | `spec/08-本地开发指南.md` §5.1 |
 | `src/server/ark/errors.ts` | 新建 | `mapArkError()`：上游 8 类 → `ErrorCode` + `retryable` | `modules/M06-生成编排.md` §5.8 |
-| `src/server/ark/index.ts`、`fixtures/ark/*.json`、`fixtures/images/*` | 新建 | `getArk()`；8 个 fixture 与 3 张真实样本图（第 9 个 `prompt-reverse.json` 归 `tickets/T18`） | `spec/08-本地开发指南.md` §5.1 |
+| `src/server/ark/index.ts`、`fixtures/ark/*.json`、`fixtures/images/*` | 新建 | `getArk()`；fixture 骨架与 3 张真实样本图（`spec/08` §5.1 共 9 个，其中第 9 个 `prompt-reverse.json` 归 `tickets/T18`） | `spec/08-本地开发指南.md` §5.1 |
 
 ## 4. 实现要点
 1. `getArk()` 按 `PROVIDER` 返回进程内单例；业务代码只依赖 `ArkProvider` 接口，不得直接 `fetch`（`spec/08-本地开发指南.md` §5.1）。
