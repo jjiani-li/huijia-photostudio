@@ -158,4 +158,4 @@ docs/prd/
 - `PROVIDER=mock` 下 `pnpm check:acceptance` **必须全绿**，这是"完成"的唯一自动化判据（无 `ARK_API_KEY` 也能跑）。
 - 真实 Ark 调用走 `PROVIDER=real`，手动冒烟，不纳入自动检查。
 - 单仓两个进程：`pnpm dev` + `pnpm worker`，**缺一不可**（见 `spec/08-本地开发指南.md` §3）。
-- 所有时间戳 UTC ISO-8601；所有生图任务参数（prompt / 参考图 id / 锚点 id / 年代 / 场景 / 模型 / size）**必须落库**，作为"可重新提交同一组输入"的复现依据（`seed` 列可空，上游是否接受并回传尚待真机验证，见 `tickets/T10-Seedream生图调用与结果转存.md` 的 `## Comments`）。
+- 所有时间戳 UTC ISO-8601；所有生图任务参数（prompt / 参考图 id / 锚点 id / 年代 / 场景 / 模型 / size）**必须落库**，作为"可重新提交复现"的依据（**不承诺逐位相同的出图**；`seed` 是否被上游接受并回传属未验证能力，见 `spec/07-验收标准.md` §6）。

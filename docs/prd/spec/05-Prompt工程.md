@@ -140,7 +140,7 @@ buildPrompt(input: {
 
 1. 修改任何包的**文本**，必须**递增对应 `pack_version`**（`v1` → `v2`）；
 2. 变更后必须重跑 `spec/07-验收标准.md` 的检查项，并在该 ticket 的 `## Comments` 记录结论；
-3. `generations` 行冗余保存了当时的 `template_version` / `era_pack_version` / `scene_pack_version`，并**全文保存了拼装结果 `prompt` 与全部生图参数**，因此历史结果可追溯、**可重新提交复现**——即使年代包已升级。注意口径：这是"可重新提交同一组输入"的可复现，**不承诺逐位相同的出图**——`seed` 参数是否被上游接受并回传尚未验证，见 `tickets/T10-Seedream生图调用与结果转存.md` 的 `## Comments`；
+3. `generations` 行冗余保存了当时的 `template_version` / `era_pack_version` / `scene_pack_version`，并**全文保存了拼装结果 `prompt` 与全部生图参数**，因此历史结果可追溯、**可重新提交复现**——即使年代包已升级。注意口径：这是"可重新提交同一组输入"的可复现，**不承诺逐位相同的出图**；`seed` 只在**上游回传时**记录、不作为复现依据（未验证的上游能力登记在 `spec/07-验收标准.md` §6）；
 4. 不做自动回滚。要回滚就把旧版本文本重新写回并把版本号 +1（保留变更轨迹）。
 
 ### 7.3 种子数据与版本的关系

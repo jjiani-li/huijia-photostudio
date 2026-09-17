@@ -42,5 +42,5 @@ pnpm test && pnpm check:acceptance
 按 `modules/M06-生成编排.md` §9 回填 `## Comments`：`partial` 不自动重试、`JOB_TIMEOUT_SECONDS` 与 `ARK_TIMEOUT_SECONDS` 同为 120s 的关系、`params_json.outputFormat` 固定 `png`。
 ## Comments
 
-- [待定决策] `modules/M06-生成编排.md` §5.4 把三张任务表的拉取顺序固定为 `identity_anchors` → `prompt_reverse_jobs` → `generations`，且每轮每表只取一行——`generations` 永远排在最后，会被更长的锚点队列饿死。→ 改为轮转拉取（每轮从上一轮结束时的下一张表开始），或按表分桶排空。
+- [已收口] 拉取顺序已改为**轮转**（`spec/04-技术基线与目录结构.md` §4.6 现在写着：worker 记住上一轮结束时的表，下一轮从它的下一张开始，每轮每表至多取一行）——固定顺序会让排在最后的 `generations` 被长锚点队列饿死（本目录 `05-生成与转存契约` 收口）。
 - [待定决策] `tickets/T09` §4 第 4 条原要求 `GET /api/generations/:id` 的 `results` 按 `photos.deleted_at IS NULL` 过滤（依据 `modules/M08` 的"结果行延后清理"）——该前提已改：软删阶段即物理删除 `generation_results`（对齐 `spec/01-领域模型与数据库.md` §2.3），故该过滤与不变式一并作废，不再实现。

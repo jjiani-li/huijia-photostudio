@@ -39,5 +39,5 @@ pnpm test && pnpm check:acceptance
 无。
 ## Comments
 
-- [待定决策] 三条上游能力断言在本仓库的实测证据里无法确认，而它们决定了本条的实现与 `spec/05-Prompt工程.md` §7.2 的"可复现"口径：① `seed` 参数是否被 `images/generations` 接受并回传（`docs/火山引擎接口文档.md` §1.2 的完整参数表里没有 `seed`，`.scratch/api_image_response.json` 的 `data[0]` 只有 `{url,size}`，`.scratch/seedream_era_scene.js` 也从不设置或读取它）；② `image` 多图参考（身份一致性的主要承载）是否真实可用，以及 ≤14 张 / ≤30MB / 6000×6000 的上限——留存的端到端实测③是纯文生图，从未带过参考图；③ `negative_prompt` 是否确实被 lite 拒绝。→ 在本条真机调用时顺手做这三条最小实测并回填结论：`seed` 若不支持/不回传，`generation_results.seed` 保持 `NULL` 且不再声称逐位复现；多图若不可用，须回改 `spec/00-总纲.md` §3 的链路铁律与 `spec/03-接口契约.md` §3.5 的 `reference_photo_ids`。
-- [待定决策] `spec/08-本地开发指南.md` §1.5 实测"请求 `2048x2048`，实际返回 `1920x1920`"。→ `generation_results` 的 `width` / `height` 与 `photos.width` / `photos.height` 必须取**转存后图片的实际像素**（用 `sharp` 探），不得直接写请求的 `size`。
+- [已收口] 三条未验证的上游能力已集中登记在 `spec/07-验收标准.md` §6 的诚实边界表（每条标 **未验证**，含证据位置与"若结论为否怎么降级"），本 ticket 的 `## Comments` 是它们的**唯一挂起处**；同时把三处复述删掉——`README.md` §4.3、`spec/00-总纲.md` §3、`spec/05-Prompt工程.md` §7.2 现在只写「可重新提交复现 / 不承诺逐位相同的出图」并引用 §6。要推翻或确认它们，走 `.scratch/upstream-capability-verification/issues/01-上游能力探针与能力台账.md` 的真机探针（本目录 `05-生成与转存契约` 收口）。
+- [已收口] 宽高一律取**转存后实测值**：`modules/M06-生成编排.md` §5.9 ③ 写明「用 `sharp.metadata()` 探转存后的实际像素、**不得**写请求的 `size`」，`spec/01-领域模型与数据库.md` §3.4 的 `photos.width` / `height` 按 `kind='generated'` 同口径声明（DTO 的 `GenerationResult.width` / `height` 由 `photos` 透出）。原引用 `spec/08-本地开发指南.md` §1.5 是笔误——那条实测记录在 `docs/火山引擎接口文档.md` §1.3、§1.5（请求 `2048x2048` 实际回 `1920x1920`）（本目录 `05-生成与转存契约` 收口）。

@@ -2,7 +2,7 @@
 /**
  * check:docs —— 文档闸门。
  *
- * 断言 `docs/prd/` 文档树与 `spec/check-registry.json` 自洽，共 12 条：
+ * 断言 `docs/prd/` 文档树与 `spec/check-registry.json` 自洽，共 13 条：
  *   1. ids-unique            检查项 ID 全局唯一
  *   2. single-owner          每个 ID 恰有一个归属文档与一条认领工单
  *   3. no-orphan             每个 ID 至少被一条工单表头认领
@@ -644,6 +644,46 @@ for (const [file, needles] of [
   }
 }
 
+// ------------------------------------------------- 断言 13：未验证的上游能力必须集中登记
+// spec/07 §6 的「未验证的上游能力」块是唯一的登记处：块内每行都要带「未验证」标记，
+// 且别处不许再留「尚待真机验证」这类一次性对冲（那会让同一条能力在多处各说一遍）。
+const HEDGE_RE = /尚待真机验证|待真机验证|尚未验证|尚待验证/;
+const spec07Lines = linesOf(spec07Path);
+const blockStart = spec07Lines.findIndex((l) => /未验证的上游能力/.test(l));
+if (blockStart === -1) {
+  fail('unverified-caps', rel(spec07Path), '找不到「未验证的上游能力」登记块（诚实边界表的唯一登记处）');
+} else {
+  let rows = 0;
+  let i = blockStart + 1;
+  while (i < spec07Lines.length && !spec07Lines[i].startsWith('|')) i += 1; // 跳过块标题与空行
+  for (; i < spec07Lines.length && spec07Lines[i].startsWith('|'); i += 1) {
+    const cells = tableCells(spec07Lines[i]);
+    if (/^\|[\s:|-]+\|$/.test(spec07Lines[i].trim())) continue; // 分隔行
+    if (cells[0] === '能力') continue; // 表头
+    if (!/未验证/.test(spec07Lines[i])) {
+      fail(
+        'unverified-caps',
+        `${rel(spec07Path)}:${i + 1}`,
+        `未验证能力登记表里这一行没有「未验证」标记：${cells[0]}`,
+      );
+    }
+    rows += 1;
+  }
+  if (rows === 0) fail('unverified-caps', rel(spec07Path), '未验证能力登记表是空的');
+}
+for (const f of mdFiles) {
+  if (path.normalize(f) === path.normalize(spec07Path)) continue;
+  linesOf(f).forEach((line, i) => {
+    if (HEDGE_RE.test(line)) {
+      fail(
+        'unverified-caps',
+        `${rel(f)}:${i + 1}`,
+        '未验证能力只在 spec/07-验收标准.md §6 登记：这里要么删掉这句对冲、要么改写为「属未验证能力，见 spec/07-验收标准.md §6」',
+      );
+    }
+  });
+}
+
 // ---------------------------------------------------------------- 输出
 if (findings.length) {
   for (const f of findings) console.error(`[${f.assertion}] ${f.where} — ${f.message}`);
@@ -653,5 +693,5 @@ if (findings.length) {
   process.exit(1);
 }
 console.log(
-  `check:docs OK: 12 条断言全绿（注册表 ${derived.total} 项：B ${derived.B} / A ${derived.A}；文档 ${derived.files} 份）`,
+  `check:docs OK: 13 条断言全绿（注册表 ${derived.total} 项：B ${derived.B} / A ${derived.A}；文档 ${derived.files} 份）`,
 );

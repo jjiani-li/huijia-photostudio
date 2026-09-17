@@ -65,6 +65,16 @@ const readme = (cell = '`DB-01`') =>
   ].join('\n');
 
 const AUTH_ROW = '| `DB-01` | 夹具检查 | 通过 | `spec/07-验收标准.md` | `[mock]` |';
+const UNVERIFIED_BLOCK = [
+  '## 6. 明确不在自动检查范围内（诚实边界）',
+  '',
+  '**未验证的上游能力（不得当作事实）**：夹具占位。',
+  '',
+  '| 能力 | 现状标注 | 证据 |',
+  '|---|---|---|',
+  '| `seed` 是否被接受并回传 | **未验证** | 夹具 |',
+  '',
+];
 
 /** `spec/03` §4 的两个判定类型别名——`retired-terms` 断言要求它们各自有名。 */
 const VERDICT_ALIASES = [
@@ -89,6 +99,7 @@ const spec07 = (body = '', row = AUTH_ROW) =>
     '',
     body,
     '',
+    ...UNVERIFIED_BLOCK,
   ].join('\n');
 
 /** 建一棵最小可绿夹具树；overrides 用来注入待测缺陷 */
@@ -490,6 +501,27 @@ test('两个判定各自有名则通过', () => {
   });
   const res = run(prd);
   assert.equal(res.code, 0, res.out);
+});
+
+// --------------------------------------------------------------- 13 未验证能力
+test('别处的「尚待真机验证」对冲被拦下', () => {
+  const prd = tree({ 'modules/M99-夹具模块.md': '# M99 · 夹具模块\n\n`seed` 是否回传尚待真机验证。\n' });
+  expectFinding(run(prd), { assertion: 'unverified-caps', needles: ['M99-夹具模块.md'] });
+});
+
+test('改写成「见 spec/07 §6」则通过', () => {
+  const prd = tree({
+    'modules/M99-夹具模块.md': '# M99 · 夹具模块\n\n`seed` 是否回传属未验证能力，见 `spec/07-验收标准.md` §6。\n',
+  });
+  const res = run(prd);
+  assert.equal(res.code, 0, res.out);
+});
+
+test('未验证能力的登记块缺「未验证」标记被拦下', () => {
+  const prd = tree({
+    'spec/07-验收标准.md': spec07().replace('| `seed` 是否被接受并回传 | **未验证** | 夹具 |', '| `seed` 是否被接受并回传 | 待查 | 夹具 |'),
+  });
+  expectFinding(run(prd), { assertion: 'unverified-caps', needles: ['没有「未验证」标记'] });
 });
 
 // --------------------------------------------------------------- 独立运行
