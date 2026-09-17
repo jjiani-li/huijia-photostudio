@@ -290,6 +290,11 @@ test('模块文档里复述错误码表（带用户文案列）被拦下', () =>
       '',
       '## 5. 错误码总表',
       '',
+      '```ts',
+      "export type EraCheckVerdict = 'pass' | 'review' | 'reject';",
+      "export type ModerationVerdict = 'pass' | 'review' | 'reject';",
+      '```',
+      '',
       '| code | HTTP | 触发场景 | 用户可见文案（示例） |',
       '|---|---|---|---|',
       '| `UNAUTHENTICATED` | 401 | 未登录 | 请先登录 |',
@@ -313,6 +318,11 @@ test('模块文档里复述错误码表（带 HTTP 状态码）被拦下', () =>
       '# 03 · 接口契约',
       '',
       '## 5. 错误码总表',
+      '',
+      '```ts',
+      "export type EraCheckVerdict = 'pass' | 'review' | 'reject';",
+      "export type ModerationVerdict = 'pass' | 'review' | 'reject';",
+      '```',
       '',
       '| code | HTTP | 触发场景 | 用户可见文案（示例） |',
       '|---|---|---|---|',
@@ -340,6 +350,11 @@ test('只留触发条件的错误码表通过（唯一事实源在 spec/03 §5�
       '',
       '## 5. 错误码总表',
       '',
+      '```ts',
+      "export type EraCheckVerdict = 'pass' | 'review' | 'reject';",
+      "export type ModerationVerdict = 'pass' | 'review' | 'reject';",
+      '```',
+      '',
       '| code | HTTP | 触发场景 | 用户可见文案（示例） |',
       '|---|---|---|---|',
       '| `UNAUTHENTICATED` | 401 | 未登录 | 请先登录 |',
@@ -365,6 +380,11 @@ test('单元格里把状态码与错误码粘在一起被拦下', () => {
       '',
       '## 5. 错误码总表',
       '',
+      '```ts',
+      "export type EraCheckVerdict = 'pass' | 'review' | 'reject';",
+      "export type ModerationVerdict = 'pass' | 'review' | 'reject';",
+      '```',
+      '',
       '| code | HTTP | 触发场景 | 用户可见文案（示例） |',
       '|---|---|---|---|',
       '| `UNAUTHENTICATED` | 401 | 未登录 | 请先登录 |',
@@ -389,6 +409,11 @@ test('验收项叙述里的「→ 409 CODE」不算复述', () => {
       '# 03 · 接口契约',
       '',
       '## 5. 错误码总表',
+      '',
+      '```ts',
+      "export type EraCheckVerdict = 'pass' | 'review' | 'reject';",
+      "export type ModerationVerdict = 'pass' | 'review' | 'reject';",
+      '```',
       '',
       '| code | HTTP | 触发场景 | 用户可见文案（示例） |',
       '|---|---|---|---|',
@@ -430,6 +455,49 @@ test('「与上游文档的差异」章节里引述上游张数不算复述', ()
       '| 上游把修复与生成拆成两张任务表 | 异步任务表共三张 |',
       '',
     ].join('\n'),
+  });
+  const res = run(prd);
+  assert.equal(res.code, 0, res.out);
+});
+
+// --------------------------------------------------------------- 12 旧词
+test('裸写旧词（面部特征锚点 / 场景代号 / 旧长度区间）被拦下', () => {
+  for (const [text, needle] of [
+    ['本产品提取**面部特征锚点**。', '面部特征锚点'],
+    ['`suggestSceneId` 是场景代号。', '场景代号'],
+    ['长度 ∈ [40, 200]。', '[40, 200]'],
+    ['窗口 `40 ≤ anchor.length ≤ 200`。', '40 ≤ anchor.length ≤ 200'],
+  ]) {
+    const prd = tree({ 'modules/M99-夹具模块.md': `# M99 · 夹具模块\n\n${text}\n` });
+    expectFinding(run(prd), { assertion: 'retired-terms', needles: [needle] });
+  }
+});
+
+test('两个判定没有各自的名字被拦下', () => {
+  const prd = tree({
+    'spec/03-接口契约.md': ['# 03 · 接口契约', '', '## 4. 形状', '', '```ts', "export interface EraCheck { passed: boolean; verdict: 'pass' | 'review' | 'reject'; }", '```', ''].join('\n'),
+    'modules/M07-生成后复核与内容审核.md': '# M07 · 生成后复核与内容审核\n\n复核判 `reject` 只标注；审核判 `reject` 终止产出。\n',
+  });
+  expectFinding(run(prd), { assertion: 'retired-terms', needles: ['EraCheckVerdict'] });
+});
+
+test('两个判定各自有名则通过', () => {
+  const prd = tree({
+    'spec/03-接口契约.md': [
+      '# 03 · 接口契约',
+      '',
+      "export type EraCheckVerdict = 'pass' | 'review' | 'reject';",
+      "export type ModerationVerdict = 'pass' | 'review' | 'reject';",
+      '',
+      '## 5. 错误码总表',
+      '',
+      '| code | HTTP | 触发场景 | 用户可见文案（示例） |',
+      '|---|---|---|---|',
+      '| `UNAUTHENTICATED` | 401 | 未登录 | 请先登录 |',
+      '',
+    ].join('\n'),
+    'modules/M07-生成后复核与内容审核.md':
+      '# M07 · 生成后复核与内容审核\n\n年代复核判定（`eraCheckVerdict`）只标注；内容审核判定（`moderationVerdict`）终止产出。\n',
   });
   const res = run(prd);
   assert.equal(res.code, 0, res.out);

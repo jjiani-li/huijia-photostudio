@@ -2,7 +2,7 @@
 /**
  * check:docs —— 文档闸门。
  *
- * 断言 `docs/prd/` 文档树与 `spec/check-registry.json` 自洽，共 11 条：
+ * 断言 `docs/prd/` 文档树与 `spec/check-registry.json` 自洽，共 12 条：
  *   1. ids-unique            检查项 ID 全局唯一
  *   2. single-owner          每个 ID 恰有一个归属文档与一条认领工单
  *   3. no-orphan             每个 ID 至少被一条工单表头认领
@@ -14,6 +14,8 @@
  *   9. error-single-source   错误码表只存在于 `spec/03-接口契约.md` §5（不复述状态码与用户文案）
  *  10. threshold-single-source prompt 长度区间只在 `spec/07-验收标准.md` 声明一次
  *  11. task-source-single-count 任务来源「几张表」全库只有一个说法（三张）
+ *  12. retired-terms        禁止裸写旧词（面部特征锚点 / 场景代号 / anchor_text 的旧区间），
+ *                            并要求两个判定在定义处与归属模块都点名（eraCheckVerdict / moderationVerdict）
  * * 只读文件系统，不依赖环境变量、凭证或产品进程。
  * 用法：node scripts/check-docs.mjs [--root <docs/prd>] [--write-index]
  *   --root         指定文档树根（默认 <仓库根>/docs/prd），测试夹具用
@@ -598,6 +600,44 @@ for (const f of mdFiles) {
   });
 }
 
+// ------------------------------------------------- 断言 12：禁止裸写旧词（术语收敛）
+// 旧词的唯一在册处是 CONTEXT.md 的 `_Avoid_` 行——它不在 docs/prd 树内，所以这里扫到的都算裸写。
+const RETIRED_TERMS = [
+  { re: /面部特征锚点/g, hint: 'canonical 术语是「身份锚点」（别名只在 CONTEXT.md 的 _Avoid_ 行里）' },
+  { re: /场景代号/g, hint: '`suggestSceneId` 是**场景 id（整数）**；只有 `suggestEraCode` 是代号字符串' },
+  { re: /\[\s*40\s*,\s*200\s*\]/g, hint: '`anchor_text` 的长度区间已统一为 60–120 **字符**' },
+  { re: /40\s*[≤<]=?\s*anchor\.length\s*[≤<]=?\s*200/g, hint: '同上：长度窗口就是 60–120 字符，不再放宽' },
+  { re: /60\s*[–-]\s*120\s*字(?!符)/g, hint: '单位是「字符」（与区间同处声明），不是「字」' },
+];
+for (const f of mdFiles) {
+  linesOf(f).forEach((line, i) => {
+    for (const { re, hint } of RETIRED_TERMS) {
+      for (const m of line.matchAll(re)) {
+        fail('retired-terms', `${rel(f)}:${i + 1}`, `禁止裸写旧词「${m[0]}」：${hint}`);
+      }
+    }
+  });
+}
+// 两个判定必须是两个词：定义处（spec/03 §4）与归属模块（M07）都要点名它们
+for (const [file, needles] of [
+  [spec07Path, []],
+  [path.join(PRD, 'spec/03-接口契约.md'), ['EraCheckVerdict', 'ModerationVerdict']],
+  [path.join(PRD, 'modules/M07-生成后复核与内容审核.md'), ['eraCheckVerdict', 'moderationVerdict']],
+]) {
+  if (needles.length === 0) continue;
+  if (!fs.existsSync(file)) continue;
+  const text = fs.readFileSync(file, 'utf8');
+  for (const needle of needles) {
+    if (!text.includes(needle)) {
+      fail(
+        'retired-terms',
+        rel(file),
+        `年代复核判定与内容审核判定必须各自有名：缺 ${needle}（定义见 CONTEXT.md 的 ### 复核与审核）`,
+      );
+    }
+  }
+}
+
 // ---------------------------------------------------------------- 输出
 if (findings.length) {
   for (const f of findings) console.error(`[${f.assertion}] ${f.where} — ${f.message}`);
@@ -607,5 +647,5 @@ if (findings.length) {
   process.exit(1);
 }
 console.log(
-  `check:docs OK: 11 条断言全绿（注册表 ${derived.total} 项：B ${derived.B} / A ${derived.A}；文档 ${derived.files} 份）`,
+  `check:docs OK: 12 条断言全绿（注册表 ${derived.total} 项：B ${derived.B} / A ${derived.A}；文档 ${derived.files} 份）`,
 );
