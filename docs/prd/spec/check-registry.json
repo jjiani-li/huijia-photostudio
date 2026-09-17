@@ -599,6 +599,16 @@
       ]
     },
     {
+      "id": "CMP-06",
+      "layer": "B",
+      "owner": "spec/06-合规与风控.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T17"
+      ]
+    },
+    {
       "id": "PRE-01",
       "layer": "A",
       "owner": "modules/M02-预处理与质量评分.md",
