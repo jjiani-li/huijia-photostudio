@@ -12,7 +12,7 @@
 
 ## 2. 不做（边界）
 - 不做 Seedream 调用、结果转存与隐式标识（归 `tickets/T10-Seedream生图调用与结果转存.md`）；本条交付 worker 机制与编排，`src/jobs/handlers/generate.ts` 由 T10 落成。
-- 不做复核与审核（归 `tickets/T11-生成后复核与内容安全审核.md`）；`readQuota()` 归 `tickets/T12-账号、会话与额度.md`；不新增端点 / 字段 / 错误码 / 环境变量。
+- 不做复核与审核（归 `tickets/T11-生成后复核与内容安全审核.md`）；`GET /api/me` 的 `quota` 段由 `tickets/T12-账号、会话与额度.md` 消费（`readQuota()` / `QuotaView` 归本条，见 §3）；不新增端点 / 字段 / 错误码 / 环境变量。
 
 ## 3. 要交付的文件
 | 路径 | 新建/修改 | 职责 | 依据 |
@@ -21,6 +21,7 @@
 | `src/server/domain/generationService.ts` | 修改 | `createGeneration` 的 8 步序列与单事务写入、`retryGeneration` 新建行 | `modules/M06-生成编排.md` §5.1–§5.2、§5.7 |
 | `src/jobs/worker.ts`、`src/jobs/registry.ts` | 修改 | 三表拉取、claim、心跳、启动回收、超时与自动重试 | `modules/M06-生成编排.md` §5.4–§5.5 |
 | `src/server/db/repositories/usage.ts` | 新建 | `usage_counters` 的 UPSERT、预扣与回滚 SQL | `modules/M06-生成编排.md` §5.6 |
+| `src/server/security/quota.ts` | 新建 | `readQuota()` / `QuotaView` 与额度判断、预扣回滚的领域封装（`GET /api/me` 的 `quota` 段由 `tickets/T12` 消费） | `modules/M08-账号历史与彻底删除.md` §3.1、`modules/M06-生成编排.md` §5 |
 | `src/server/db/repositories/generations.ts` | 新建 | `generations` 全部 SQL | `spec/03-接口契约.md` §2.3 |
 | `src/server/db/repositories/audit.ts` | 修改 | `generation.create` / `generation.finish` 审计 | `spec/03-接口契约.md` §2.3 |
 | `app/api/health/route.ts` | 修改 | `worker.alive` / `worker.lastSeenAt` | `spec/03-接口契约.md` §3.7 |

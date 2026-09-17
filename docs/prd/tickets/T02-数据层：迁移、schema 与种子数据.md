@@ -20,12 +20,14 @@
 | `migrations/001-init.sql` | 新建 | 与 `spec/02-schema.sql` 逐字符一致的首个迁移 | `spec/04-技术基线与目录结构.md` §2 |
 | `src/server/db/connection.ts`、`src/server/db/migrate.ts` | 新建 | `getDb()` 单例（`journal_mode=WAL`、`foreign_keys=OFF`）；按序执行迁移 + `schema_migrations` 记账 | `spec/04-技术基线与目录结构.md` §4.3 |
 | `src/server/db/seed.ts` | 新建 | 读 `spec/era-scene-seed.json` 幂等 upsert 三张配置表 + `DEV_USER` | `spec/08-本地开发指南.md` §2–§3.2 |
+| `src/server/auth/session.ts` | 新建 | **鉴权桩**：`getSessionUser()` / `requireUser()` 返回种子 `DEV_USER`、不查 cookie（真实会话由 `tickets/T12` 在**同一路径**替换，见 §4 第 4 条） | `spec/08-本地开发指南.md` §3.2、`spec/03-接口契约.md` §1.2 |
 | `src/server/db/repositories/*.ts` | 新建 | 12 个 repository 的骨架与函数签名 | `spec/04-技术基线与目录结构.md` §2 |
 
 ## 4. 实现要点
 1. 重复跑 `pnpm migrate` / `pnpm seed` 必须幂等；`seed` 结束断言 `eras=4`、`scenes=5`、`era_scene_profiles=20`，不符**非零退出**（`spec/08-本地开发指南.md` §2）。
 2. repository 入参为原子值 / DTO，返回 camelCase 领域对象；`*_json` 列在边界 `JSON.parse` / `stringify` + zod 校验（`spec/04-技术基线与目录结构.md` §4.3）。
 3. 所有写操作包在 `db.transaction(...)`；配置表只允许 `SELECT` 与种子 upsert；`DEV_USER` 必须已实名（`verified_at` 非空），供 `tickets/T03`–`tickets/T11` 使用。
+4. **M1/M2 鉴权桩**（`src/server/auth/session.ts`）：`getSessionUser()` / `requireUser()` 直接返回种子 `DEV_USER`（`id` 取种子行），**不读 cookie、不查 `sessions`**；`DEV_USER` 已实名，故实名门槛一并通过。存在期：`tickets/T03`–`tickets/T11` 的受保护端点全部依赖它；替换出口是 `tickets/T12` §4 第 5 条——T12 **覆盖同一路径**为真实会话实现，桩随之消失。
 
 ## 5. 完成判定
 ```bash
@@ -39,4 +41,4 @@ pnpm test                     # DB-01–DB-05、DB-08 全绿
 无。
 ## Comments
 
-- [待定决策] `tickets/README.md` §1 说 M1/M2 用种子 `DEV_USER` 跑通 `T03`–`T11`，但 `requireUser()` / 会话读写全部由 `tickets/T12-账号、会话与额度.md`（M3）交付，而 `spec/03-接口契约.md` §1.2 要求每个受保护端点在 handler 开头调 `requireUser()`——M1/M2 的端点没有鉴权实现。→ 在本条增加一小节：`requireUser()` 桩（读取种子 `DEV_USER`，不查 cookie），并在 `tickets/T12` 明确"替换为真实会话"的出口条件与回归项（含 `API-03`）。
+- [已收口] M1/M2 的鉴权桩归本条：`src/server/auth/session.ts` 落 `getSessionUser()` / `requireUser()` 桩（返回种子 `DEV_USER`、不查 cookie，见 §3、§4 第 4 条），`tickets/T12` 在**同一路径**替换为真实会话并写明出口条件与回归项（含 `API-03`）（本目录 `07-依赖边与所有权`）。
