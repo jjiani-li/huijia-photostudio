@@ -5,8 +5,8 @@
 
 ## 现在在哪
 
-- **契约单点化系列**（`.scratch/contract-freeze/`，spec 为 `spec.md`）：**01–08 已交付**，Status 均为 `ready-for-human`，工作树干净、全部已提交。
-- **下一张：`09-历史与结果页口径.md`**（Status `ready-for-agent`），之后 10 页面形态与文案清单、11 合规与差异登记。
+- **契约单点化系列**（`.scratch/contract-freeze/`，spec 为 `spec.md`）：**01–09 已交付**，Status 均为 `ready-for-human`，工作树干净、全部已提交。
+- **下一张：`10-页面形态与文案清单.md`**（Status `ready-for-agent`），之后 11 合规与差异登记。
 - **产品侧**（`docs/prd/tickets/`）：只做了 T01（脚手架 + 四个横切层，提交 `606ed08`/`21e2915`）；**下一张是 T02 数据层**（迁移、schema、种子、11 个 repository、`migrate`/`seed`/`db:reset` 脚本）。
 
 ## 工具现状（改动它们要同步 `docs/prd/spec/08-本地开发指南.md` §3.3 与脚本头部注释）
@@ -39,7 +39,7 @@
 
 ```
 在 D:\桌面\wt-20260915\day3 继续做「契约单点化」系列。先读 .scratch/contract-freeze/NEXT.md
-与 issues/09-历史与结果页口径.md，按前八张 ticket 的做法实现它：收敛文档、必要时加闸门断言、
+与 issues/10-页面形态与文案清单.md，按前九张 ticket 的做法实现它：收敛文档、必要时加闸门断言、
 跑 corepack pnpm check:docs / test:docs / test / check、提交、再跑 /code-review 两轴评审并收口、
 最后勾清单并把 Status 改成 ready-for-human。**一章一停**：交付后停下汇报，等我回复同意再进下一章。
 ```
