@@ -5,8 +5,8 @@
 
 ## 现在在哪
 
-- **契约单点化系列**（`.scratch/contract-freeze/`，spec 为 `spec.md`）：**01–10 已交付**，Status 均为 `ready-for-human`，工作树干净、全部已提交。
-- **下一张：`11-合规与差异登记.md`**（Status `ready-for-agent`），之后无（11 是该系列最后一张）。
+- **契约单点化系列**（`.scratch/contract-freeze/`，spec 为 `spec.md`）：**01–11 已全部交付**（11 是该系列最后一张），Status 均为 `ready-for-human`，工作树干净、全部已提交。
+- **契约侧没有下一张了。** 想继续就转产品线：`/implement docs/prd/tickets`。
 - **产品侧**（`docs/prd/tickets/`）：只做了 T01（脚手架 + 四个横切层，提交 `606ed08`/`21e2915`）；**下一张是 T02 数据层**（迁移、schema、种子、11 个 repository、`migrate`/`seed`/`db:reset` 脚本）。
 
 ## 工具现状（改动它们要同步 `docs/prd/spec/08-本地开发指南.md` §3.3 与脚本头部注释）
@@ -16,7 +16,7 @@
 - `scripts/check-docs.test.mjs`：50 个夹具用例（新增断言必须配用例）。
 - 产品骨架：Next 15 + TS strict + vitest（17 个用例）+ eslint/tsconfig/`package.json`。
 
-## 一条 ticket 的做法（01–10 都按这个走）
+## 一条 ticket 的做法（01–11 都按这个走）
 
 1. 读 `.scratch/contract-freeze/issues/NN-*.md` 的清单 + `spec.md` 里对应的裁定。
 2. 收敛文档（跨多个文件时可把「同一类、互不重叠的文件」分包给子代理并行做，然后统一验证）。
@@ -29,19 +29,19 @@
 
 ## 直接发给我的话
 
-热会话（上下文还在）：
+产品线热会话（上下文还在）：
 
 ```
-/implement spec ticket06
+/implement docs/prd/tickets ticket02
 ```
 
 冷启动（新会话、上下文已清）：
 
 ```
-在 D:\桌面\wt-20260915\day3 继续做「契约单点化」系列。先读 .scratch/contract-freeze/NEXT.md
-与 issues/11-合规与差异登记.md，按前十张 ticket 的做法实现它：收敛文档、必要时加闸门断言、
-跑 corepack pnpm check:docs / test:docs / test / check、提交、再跑 /code-review 两轴评审并收口、
-最后勾清单并把 Status 改成 ready-for-human。**一章一停**：交付后停下汇报，等我回复同意再进下一章。
+在 D:\桌面\wt-20260915\day3 转做产品线。先读 .scratch/contract-freeze/NEXT.md 与
+docs/prd/tickets/T02-数据层：迁移、schema 与种子数据.md，按 docs/prd/ 的施工纪律（spec/09）
+与 T01 的做法实现 T02：跑 pnpm 的 test/check 等、提交、再跑 /code-review 两轴评审并收口。
+**一章一停**：交付后停下汇报，等我回复同意再进下一章。
 ```
 
-想改做产品线就说：`/implement docs/prd/tickets`（下一次是 T02）。
+（契约单点化系列 01–11 已全部交付并置 `ready-for-human`，没有下一张。）
