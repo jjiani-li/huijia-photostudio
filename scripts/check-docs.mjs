@@ -16,7 +16,7 @@
  *  11. task-source-single-count 任务来源「几张表」全库只有一个说法（三张）
  *  12. retired-terms        禁止裸写旧词（面部特征锚点 / 场景代号 / anchor_text 的旧区间），
  *                            并要求两个判定在定义处与归属模块都点名（eraCheckVerdict / moderationVerdict）
- * * 只读文件系统，不依赖环境变量、凭证或产品进程。
+ * 只读文件系统，不依赖环境变量、凭证或产品进程。
  * 用法：node scripts/check-docs.mjs [--root <docs/prd>] [--write-index]
  *   --root         指定文档树根（默认 <仓库根>/docs/prd），测试夹具用
  *   --write-index  按工单表头重写 tickets/README.md 的检查项列（其余断言照跑）
@@ -610,7 +610,15 @@ const RETIRED_TERMS = [
   { re: /60\s*[–-]\s*120\s*字(?!符)/g, hint: '单位是「字符」（与区间同处声明），不是「字」' },
 ];
 for (const f of mdFiles) {
+  let section = '';
   linesOf(f).forEach((line, i) => {
+    const heading = line.match(/^#{2,3}\s+(.*)$/);
+    if (heading) {
+      section = heading[1];
+      return;
+    }
+    // 「与上游文档的差异」章节会照引上游旧词，不算裸写
+    if (/差异|上游/.test(section)) return;
     for (const { re, hint } of RETIRED_TERMS) {
       for (const m of line.matchAll(re)) {
         fail('retired-terms', `${rel(f)}:${i + 1}`, `禁止裸写旧词「${m[0]}」：${hint}`);
@@ -620,11 +628,9 @@ for (const f of mdFiles) {
 }
 // 两个判定必须是两个词：定义处（spec/03 §4）与归属模块（M07）都要点名它们
 for (const [file, needles] of [
-  [spec07Path, []],
   [path.join(PRD, 'spec/03-接口契约.md'), ['EraCheckVerdict', 'ModerationVerdict']],
   [path.join(PRD, 'modules/M07-生成后复核与内容审核.md'), ['eraCheckVerdict', 'moderationVerdict']],
 ]) {
-  if (needles.length === 0) continue;
   if (!fs.existsSync(file)) continue;
   const text = fs.readFileSync(file, 'utf8');
   for (const needle of needles) {
