@@ -4,7 +4,7 @@
 > **上游**：`docs/raw/AIGC_PRD.md` §5、§7 ／ `spec/01-领域模型与数据库.md`、`spec/05-Prompt工程.md`、`spec/era-scene-seed.json`
 > **下游**：`modules/M06-生成编排.md`、`pages/P02-年代与场景选择.md`、`tickets/T08-年代场景配置与Prompt拼装.md`
 
-> 只做两件事：把 `eras` / `scenes` / `era_scene_profiles` 三张只读配置表安全地喂给前端；把「身份锚点 + 年代包 + 场景包 + 模板常量 + 组合微调」拼成唯一一份可复现的 prompt。
+> 一句话职责：把 `eras` / `scenes` / `era_scene_profiles` 三张只读配置表安全地喂给前端；把「身份锚点 + 年代包 + 场景包 + 模板常量 + 组合微调」拼成唯一一份可复现的 prompt。
 
 ## 1. 职责与边界
 

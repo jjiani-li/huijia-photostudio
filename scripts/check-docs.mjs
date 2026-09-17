@@ -2,7 +2,7 @@
 /**
  * check:docs —— 文档闸门。
  *
- * 断言 `docs/prd/` 文档树与 `spec/check-registry.json` 自洽，共 13 条：
+ * 断言 `docs/prd/` 文档树与 `spec/check-registry.json` 自洽，共 16 条：
  *   1. ids-unique            检查项 ID 全局唯一
  *   2. single-owner          每个 ID 恰有一个归属文档与一条认领工单
  *   3. no-orphan             每个 ID 至少被一条工单表头认领
@@ -18,6 +18,9 @@
  *                            并要求两个判定在定义处与归属模块都点名（eraCheckVerdict / moderationVerdict）
  *  13. unverified-caps      未验证的上游能力集中登记在 `spec/07` §6（逐行标「未验证」），
  *                            别处不许再留一句「待真机验证」这类一次性对冲
+ *  14. page-min-sections     每份页面文档含最小必需节（目标、范围与依赖 / 接口消费 / 状态与错误 / 验收与测试要点）
+ *  15. module-min-sections   每份模块文档含最小必需节（七节）+ `> 一句话职责：` 一行，且 `### N.M` 子节编号从 .1 起连续
+ *  16. error-list-coverage   前端「code → 形态」清单覆盖 `spec/03` §5 的全部错误码
  * 只读文件系统，不依赖环境变量、凭证或产品进程。
  * 用法：node scripts/check-docs.mjs [--root <docs/prd>] [--write-index]
  *   --root         指定文档树根（默认 <仓库根>/docs/prd），测试夹具用
@@ -686,6 +689,96 @@ for (const f of mdFiles) {
   });
 }
 
+// ------------------------------------------------- 断言 14/15：文档最小必需节
+// 模板（页面文档四节 + 模块文档九节 + 一句话职责 + 子节编号连续）定义在
+// `spec/09-施工纪律.md` §6.1。章节标题以列出的字面开头即可（允许带限定后缀），其余节可自由增补。
+const PAGE_REQUIRED = ['目标、范围与依赖', '接口消费', '状态与错误', '验收与测试要点'];
+const MODULE_REQUIRED = [
+  '职责与边界',
+  '数据读写',
+  '关键流程',
+  '边界与错误',
+  '配置与环境变量',
+  '测试要点',
+  '与上游文档的差异',
+];
+const docHeadingText = (line) => {
+  const m = line.match(/^##\s+(?:\d+(?:\.\d+)*[.、]?\s*)?(.*)$/);
+  return m ? m[1].trim() : null;
+};
+const checkMinSections = (dirName, required, assertion) => {
+  const dir = path.join(PRD, dirName);
+  if (!fs.existsSync(dir)) return;
+  for (const name of fs.readdirSync(dir).filter((n) => n.endsWith('.md')).sort()) {
+    const full = path.join(dir, name);
+    const lines = linesOf(full);
+    const heads = lines.map(docHeadingText).filter(Boolean);
+    for (const want of required) {
+      if (!heads.some((h) => h.startsWith(want))) {
+        fail(assertion, rel(full), `缺少最小必需节「${want}」（标题需以该字面开头，见 spec/09-施工纪律.md §6.1）`);
+      }
+    }
+    if (assertion !== 'module-min-sections') continue;
+    if (!lines.some((l) => /^>\s*一句话职责：/.test(l))) {
+      fail(assertion, rel(full), '缺少 `> 一句话职责：…` 一行（模板见 spec/09-施工纪律.md §6.1）');
+    }
+    const subs = new Map(); // 顶层节号 → Map(子节号 → 首行行号)
+    lines.forEach((l, i) => {
+      const s = l.match(/^###\s+(\d+)\.(\d+)/);
+      if (!s) return;
+      if (!subs.has(s[1])) subs.set(s[1], new Map());
+      subs.get(s[1]).set(Number(s[2]), i + 1);
+    });
+    for (const [parent, map] of subs) {
+      for (let k = 1; k <= Math.max(...map.keys()); k += 1) {
+        if (!map.has(k)) {
+          fail(
+            assertion,
+            `${rel(full)}:${Math.min(...map.values())}`,
+            `§${parent} 的子节编号断裂：缺 §${parent}.${k}（子节必须从 .1 起连续）`,
+          );
+        }
+      }
+    }
+  }
+};
+checkMinSections('pages', PAGE_REQUIRED, 'page-min-sections');
+checkMinSections('modules', MODULE_REQUIRED, 'module-min-sections');
+
+// ------------------------------------------------- 断言 16：错误码形态清单覆盖全部已定义错误码
+// `spec/03-接口契约.md` §5 是错误码的唯一事实源；前端「code → 呈现形态」的清单在
+// `pages/P00-设计基准与路由.md` 的「状态与错误」节，两者必须覆盖同一批 code。
+const p00Path = path.join(PRD, 'pages/P00-设计基准与路由.md');
+if (fs.existsSync(p00Path) && codeStatus.size > 0) {
+  const lines = linesOf(p00Path);
+  const hi = lines.findIndex((l) => docHeadingText(l)?.startsWith('状态与错误'));
+  let tableLine = null;
+  if (hi !== -1) {
+    for (let i = hi + 1; i < lines.length; i += 1) {
+      if (/^##\s/.test(lines[i])) break;
+      if (/^\|\s*code\s*\|/.test(lines[i])) {
+        tableLine = i;
+        break;
+      }
+    }
+  }
+  if (tableLine === null) {
+    fail('error-list-coverage', rel(p00Path), '「状态与错误」节下找不到 `| code |` 形态清单（前端错误码的唯一落点）');
+  } else {
+    const present = new Set();
+    for (let i = tableLine + 2; i < lines.length && lines[i].startsWith('|'); i += 1) {
+      for (const t of BACKTICKED(tableCells(lines[i])[0] ?? '')) {
+        if (codeStatus.has(t)) present.add(t);
+      }
+    }
+    for (const code of codeStatus.keys()) {
+      if (!present.has(code)) {
+        fail('error-list-coverage', rel(p00Path), `形态清单缺少错误码 ${code}（spec/03-接口契约.md §5 已定义）`);
+      }
+    }
+  }
+}
+
 // ---------------------------------------------------------------- 输出
 if (findings.length) {
   for (const f of findings) console.error(`[${f.assertion}] ${f.where} — ${f.message}`);
@@ -695,5 +788,5 @@ if (findings.length) {
   process.exit(1);
 }
 console.log(
-  `check:docs OK: 13 条断言全绿（注册表 ${derived.total} 项：B ${derived.B} / A ${derived.A}；文档 ${derived.files} 份）`,
+  `check:docs OK: 16 条断言全绿（注册表 ${derived.total} 项：B ${derived.B} / A ${derived.A}；文档 ${derived.files} 份）`,
 );

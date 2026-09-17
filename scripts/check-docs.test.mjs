@@ -102,6 +102,67 @@ const spec07 = (body = '', row = AUTH_ROW) =>
     ...UNVERIFIED_BLOCK,
   ].join('\n');
 
+/** 一份符合模块文档模板的骨架：`> 一句话职责：` + 最小必需节（七节）。 */
+const MODULE_BODY = [
+  '职责与边界',
+  '数据读写',
+  '关键流程与状态机',
+  '边界与错误',
+  '配置与环境变量',
+  '测试要点',
+  '与上游文档的差异',
+]
+  .map((t, i) => `## ${i + 1}. ${t}`)
+  .join('\n');
+const moduleDoc = (body = '', h1 = '# M99 · 夹具模块') =>
+  [h1, '', '> **层级**：夹具', '', '> 一句话职责：夹具模块。', '', MODULE_BODY, '', body, ''].join('\n');
+
+/** 一份符合页面文档模板的骨架：四节最小必需节。 */
+const pageDoc = (body = '', h1 = '# P99 · 夹具页') =>
+  [
+    h1,
+    '',
+    body,
+    '## 1. 目标、范围与依赖',
+    '## 2. 接口消费',
+    '## 3. 状态与错误',
+    '## 4. 验收与测试要点',
+    '',
+  ].join('\n');
+
+/** `spec/03` §5 的错误码总表（含 `retired-terms` 要求的两个判定别名）。 */
+const spec03 = (...codes) =>
+  [
+    '# 03 · 接口契约',
+    '',
+    ...VERDICT_ALIASES,
+    '## 5. 错误码总表',
+    '',
+    '| code | HTTP | 触发场景 | 用户可见文案（示例） |',
+    '|---|---|---|---|',
+    ...codes.map((c) => `| \`${c}\` | 401 | 夹具场景 | 夹具文案 |`),
+    '',
+  ].join('\n');
+
+/** `pages/P00` 的「状态与错误」节 + 前端 `code → 形态` 清单（并带上页面模板的其余必需节）。 */
+const p00WithCodes = (...codes) =>
+  [
+    '# P00 · 设计基准与路由',
+    '',
+    '## 1. 目标、范围与依赖',
+    '',
+    '## 8. 状态与错误：错误呈现（`ErrorNotice`）',
+    '',
+    '| code | 形态 | 附加动作 |',
+    '|---|---|---|',
+    ...codes.map((c) => `| \`${c}\` | inline | — |`),
+    '',
+    '## 10. 接口消费与数据读写',
+    '',
+    '## 12. 验收与测试要点',
+    '',
+  ].join('\n');
+
 /** 建一棵最小可绿夹具树；overrides 用来注入待测缺陷 */
 function tree(overrides = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'check-docs-'));
@@ -347,16 +408,15 @@ test('模块文档里复述错误码表（带 HTTP 状态码）被拦下', () =>
 
 test('只留触发条件的错误码表通过（唯一事实源在 spec/03 §5）', () => {
   const prd = tree({
-    'modules/M99-夹具模块.md': [
-      '# M99 · 夹具模块',
-      '',
-      '码与文案的唯一事实源是 `spec/03-接口契约.md` §5。',
-      '',
-      '| 错误码 | 触发条件 |',
-      '|---|---|',
-      '| `UNAUTHENTICATED` | 未登录 |',
-      '',
-    ].join('\n'),
+    'modules/M99-夹具模块.md': moduleDoc(
+      [
+        '码与文案的唯一事实源是 `spec/03-接口契约.md` §5。',
+        '',
+        '| 错误码 | 触发条件 |',
+        '|---|---|',
+        '| `UNAUTHENTICATED` | 未登录 |',
+      ].join('\n'),
+    ),
     'spec/03-接口契约.md': [
       '# 03 · 接口契约',
       '',
@@ -401,14 +461,13 @@ test('单元格里把状态码与错误码粘在一起被拦下', () => {
 test('验收项叙述里的「→ 409 CODE」不算复述', () => {
   const prd = tree({
     'spec/07-验收标准.md': spec07(''),
-    'modules/M99-夹具模块.md': [
-      '# M99 · 夹具模块',
-      '',
-      '| 检查 | 判定 |',
-      '|---|---|',
-      '| 未确认的锚点发起生成 → `409 ANCHOR_NOT_CONFIRMED` | 通过 |',
-      '',
-    ].join('\n'),
+    'modules/M99-夹具模块.md': moduleDoc(
+      [
+        '| 检查 | 判定 |',
+        '|---|---|',
+        '| 未确认的锚点发起生成 → `409 ANCHOR_NOT_CONFIRMED` | 通过 |',
+      ].join('\n'),
+    ),
     'spec/03-接口契约.md': [
       '# 03 · 接口契约',
       '',
@@ -445,16 +504,13 @@ test('任务来源说成非「三张表」被拦下', () => {
 
 test('「与上游文档的差异」章节里引述上游张数不算复述', () => {
   const prd = tree({
-    'modules/M99-夹具模块.md': [
-      '# M99 · 夹具模块',
-      '',
-      '## 10. 与上游文档的差异',
-      '',
-      '| 上游（`docs/raw/AIGC_PRD.md`） | 本方案 |',
-      '|---|---|',
-      '| 上游把修复与生成拆成两张任务表 | 异步任务表共三张 |',
-      '',
-    ].join('\n'),
+    'modules/M99-夹具模块.md': moduleDoc(
+      [
+        '| 上游（`docs/raw/AIGC_PRD.md`） | 本方案 |',
+        '|---|---|',
+        '| 上游把修复与生成拆成两张任务表 | 异步任务表共三张 |',
+      ].join('\n'),
+    ),
   });
   const res = run(prd);
   assert.equal(res.code, 0, res.out);
@@ -496,8 +552,10 @@ test('两个判定各自有名则通过', () => {
       '| `UNAUTHENTICATED` | 401 | 未登录 | 请先登录 |',
       '',
     ].join('\n'),
-    'modules/M07-生成后复核与内容审核.md':
-      '# M07 · 生成后复核与内容审核\n\n年代复核判定（`eraCheckVerdict`）只标注；内容审核判定（`moderationVerdict`）终止产出。\n',
+    'modules/M07-生成后复核与内容审核.md': moduleDoc(
+      '年代复核判定（`eraCheckVerdict`）只标注；内容审核判定（`moderationVerdict`）终止产出。',
+      '# M07 · 生成后复核与内容审核',
+    ),
   });
   const res = run(prd);
   assert.equal(res.code, 0, res.out);
@@ -511,7 +569,7 @@ test('别处的「尚待真机验证」对冲被拦下', () => {
 
 test('改写成「见 spec/07 §6」则通过', () => {
   const prd = tree({
-    'modules/M99-夹具模块.md': '# M99 · 夹具模块\n\n`seed` 是否回传属未验证能力，见 `spec/07-验收标准.md` §6。\n',
+    'modules/M99-夹具模块.md': moduleDoc('`seed` 是否回传属未验证能力，见 `spec/07-验收标准.md` §6。'),
   });
   const res = run(prd);
   assert.equal(res.code, 0, res.out);
@@ -522,6 +580,56 @@ test('未验证能力的登记块缺「未验证」标记被拦下', () => {
     'spec/07-验收标准.md': spec07().replace('| `seed` 是否被接受并回传 | **未验证** | 夹具 |', '| `seed` 是否被接受并回传 | 待查 | 夹具 |'),
   });
   expectFinding(run(prd), { assertion: 'unverified-caps', needles: ['没有「未验证」标记'] });
+});
+
+// --------------------------------------------------------------- 14/15/16 最小必需节与错误码覆盖
+test('页面文档缺少最小必需节被拦下', () => {
+  const prd = tree({ 'pages/P99-夹具页.md': '# P99 · 夹具页\n\n## 1. 目标、范围与依赖\n## 2. 接口消费\n' });
+  expectFinding(run(prd), { assertion: 'page-min-sections', needles: ['P99-夹具页.md', '状态与错误'] });
+});
+
+test('页面文档含四节最小必需节则通过', () => {
+  const prd = tree({ 'pages/P99-夹具页.md': pageDoc() });
+  const res = run(prd);
+  assert.equal(res.code, 0, res.out);
+});
+
+test('模块文档缺 `> 一句话职责：` 被拦下', () => {
+  const prd = tree({ 'modules/M99-夹具模块.md': `# M99 · 夹具模块\n\n${MODULE_BODY}\n` });
+  expectFinding(run(prd), { assertion: 'module-min-sections', needles: ['M99-夹具模块.md', '一句话职责'] });
+});
+
+test('模块文档缺最小必需节被拦下', () => {
+  const prd = tree({ 'modules/M99-夹具模块.md': '# M99 · 夹具模块\n\n> 一句话职责：夹具。\n\n## 1. 职责与边界\n' });
+  expectFinding(run(prd), { assertion: 'module-min-sections', needles: ['M99-夹具模块.md', '测试要点'] });
+});
+
+test('模块文档子节编号断裂被拦下', () => {
+  const prd = tree({ 'modules/M99-夹具模块.md': `${moduleDoc()}\n### 2.2 子节\n` });
+  expectFinding(run(prd), { assertion: 'module-min-sections', needles: ['子节编号断裂', '§2.1'] });
+});
+
+test('模块文档符合模板（七节 + 一句话职责）则通过', () => {
+  const prd = tree({ 'modules/M99-夹具模块.md': moduleDoc() });
+  const res = run(prd);
+  assert.equal(res.code, 0, res.out);
+});
+
+test('前端错误码形态清单漏了已定义的错误码被拦下', () => {
+  const prd = tree({
+    'spec/03-接口契约.md': spec03('UNAUTHENTICATED', 'INTERNAL'),
+    'pages/P00-设计基准与路由.md': p00WithCodes('UNAUTHENTICATED'),
+  });
+  expectFinding(run(prd), { assertion: 'error-list-coverage', needles: ['P00-设计基准与路由.md', 'INTERNAL'] });
+});
+
+test('前端错误码形态清单覆盖全部错误码则通过', () => {
+  const prd = tree({
+    'spec/03-接口契约.md': spec03('UNAUTHENTICATED', 'INTERNAL'),
+    'pages/P00-设计基准与路由.md': p00WithCodes('UNAUTHENTICATED', 'INTERNAL'),
+  });
+  const res = run(prd);
+  assert.equal(res.code, 0, res.out);
 });
 
 // --------------------------------------------------------------- 独立运行

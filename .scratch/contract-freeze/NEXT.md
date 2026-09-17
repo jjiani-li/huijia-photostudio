@@ -5,18 +5,18 @@
 
 ## 现在在哪
 
-- **契约单点化系列**（`.scratch/contract-freeze/`，spec 为 `spec.md`）：**01–09 已交付**，Status 均为 `ready-for-human`，工作树干净、全部已提交。
-- **下一张：`10-页面形态与文案清单.md`**（Status `ready-for-agent`），之后 11 合规与差异登记。
+- **契约单点化系列**（`.scratch/contract-freeze/`，spec 为 `spec.md`）：**01–10 已交付**，Status 均为 `ready-for-human`，工作树干净、全部已提交。
+- **下一张：`11-合规与差异登记.md`**（Status `ready-for-agent`），之后无（11 是该系列最后一张）。
 - **产品侧**（`docs/prd/tickets/`）：只做了 T01（脚手架 + 四个横切层，提交 `606ed08`/`21e2915`）；**下一张是 T02 数据层**（迁移、schema、种子、11 个 repository、`migrate`/`seed`/`db:reset` 脚本）。
 
 ## 工具现状（改动它们要同步 `docs/prd/spec/08-本地开发指南.md` §3.3 与脚本头部注释）
 
 - `docs/prd/spec/check-registry.json`：89 条检查项（B 67 / A 22）。
-- `scripts/check-docs.mjs`：13 条静态断言；`--root` 指夹具树、`--write-index` 按工单表头重写 `tickets/README.md` 的检查项列。
-- `scripts/check-docs.test.mjs`：40 个夹具用例（新增断言必须配用例）。
+- `scripts/check-docs.mjs`：16 条静态断言（新增 `page-min-sections` / `module-min-sections` / `error-list-coverage`）；`--root` 指夹具树、`--write-index` 按工单表头重写 `tickets/README.md` 的检查项列。
+- `scripts/check-docs.test.mjs`：48 个夹具用例（新增断言必须配用例）。
 - 产品骨架：Next 15 + TS strict + vitest（17 个用例）+ eslint/tsconfig/`package.json`。
 
-## 一条 ticket 的做法（01–07 都按这个走）
+## 一条 ticket 的做法（01–10 都按这个走）
 
 1. 读 `.scratch/contract-freeze/issues/NN-*.md` 的清单 + `spec.md` 里对应的裁定。
 2. 收敛文档（跨多个文件时可把「同一类、互不重叠的文件」分包给子代理并行做，然后统一验证）。
@@ -39,7 +39,7 @@
 
 ```
 在 D:\桌面\wt-20260915\day3 继续做「契约单点化」系列。先读 .scratch/contract-freeze/NEXT.md
-与 issues/10-页面形态与文案清单.md，按前九张 ticket 的做法实现它：收敛文档、必要时加闸门断言、
+与 issues/11-合规与差异登记.md，按前十张 ticket 的做法实现它：收敛文档、必要时加闸门断言、
 跑 corepack pnpm check:docs / test:docs / test / check、提交、再跑 /code-review 两轴评审并收口、
 最后勾清单并把 Status 改成 ready-for-human。**一章一停**：交付后停下汇报，等我回复同意再进下一章。
 ```
