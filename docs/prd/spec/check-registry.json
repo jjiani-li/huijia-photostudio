@@ -799,7 +799,7 @@
       ]
     },
     {
-      "id": "ERA-02",
+      "id": "ERA-01",
       "layer": "A",
       "owner": "modules/M07-生成后复核与内容审核.md",
       "path": "[mock]",
@@ -809,7 +809,7 @@
       ]
     },
     {
-      "id": "ERA-01",
+      "id": "ERA-02",
       "layer": "A",
       "owner": "modules/M07-生成后复核与内容审核.md",
       "path": "[mock]",

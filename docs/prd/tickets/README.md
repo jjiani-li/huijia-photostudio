@@ -60,7 +60,7 @@ T20 验收：自动化检查与端到端冒烟   (依赖以上全部)
 
 **检查项 ID 的权威定义在 `spec/07-验收标准.md` §2**。本表的 ID 只是索引：写 ticket 的「完成判定」前必须先读 `spec/07-验收标准.md` §2 确认 ID 存在且归属正确。
 
-**`PRE-01`–`PRE-12` 与 `MARK-01`–`MARK-07` 是 A 层检查项**，以 `pnpm test`（vitest）通过为准，**不是** `pnpm check:acceptance` 项；其余 ID 一律是 B 层项（`pnpm check:acceptance`，`PROVIDER=mock`）。
+**`PRE-01`–`PRE-12`、`MARK-01`–`MARK-07`、`PR-10` 与 `ERA-01`/`ERA-02` 是 A 层检查项**，以 `pnpm test`（vitest）通过为准，**不是** `pnpm check:acceptance` 项；其余 ID 一律是 B 层项（`pnpm check:acceptance`，`PROVIDER=mock`）。
 
 ---
 
