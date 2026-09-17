@@ -1,0 +1,852 @@
+{
+  "version": "v1",
+  "description": "检查项注册表：每条记录 = 一个检查项 ID。ID 的权威定义在 spec/07-验收标准.md §2；本文件是机器可读的同一份事实，由 pnpm check:docs 断言与文档树一致。字段：id 检查项 ID；layer A（pnpm test）/ B（pnpm check:acceptance）；owner 归属文档（相对 docs/prd/）；path 路径标签；assertedBy 断言命令；tickets 认领工单（必须与该工单表头「检查项」行一致）。",
+  "retiredIds": [
+    {
+      "id": "U14",
+      "reason": "只出现在上游材料里的 ID，本仓库从未注册；保留在册以便闸门拦住它再次被引用（见 tickets/T01 的 Comments）。"
+    }
+  ],
+  "checks": [
+    {
+      "id": "DB-01",
+      "layer": "B",
+      "owner": "spec/01-领域模型与数据库.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T02"
+      ]
+    },
+    {
+      "id": "DB-02",
+      "layer": "B",
+      "owner": "spec/01-领域模型与数据库.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T02"
+      ]
+    },
+    {
+      "id": "DB-03",
+      "layer": "B",
+      "owner": "spec/01-领域模型与数据库.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T02"
+      ]
+    },
+    {
+      "id": "DB-04",
+      "layer": "B",
+      "owner": "spec/01-领域模型与数据库.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T02"
+      ]
+    },
+    {
+      "id": "DB-05",
+      "layer": "B",
+      "owner": "spec/01-领域模型与数据库.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T02"
+      ]
+    },
+    {
+      "id": "DB-06",
+      "layer": "B",
+      "owner": "spec/01-领域模型与数据库.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T02"
+      ]
+    },
+    {
+      "id": "DB-07",
+      "layer": "B",
+      "owner": "spec/01-领域模型与数据库.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T02"
+      ]
+    },
+    {
+      "id": "DB-08",
+      "layer": "B",
+      "owner": "spec/01-领域模型与数据库.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T02"
+      ]
+    },
+    {
+      "id": "PR-01",
+      "layer": "B",
+      "owner": "modules/M05-年代场景配置与Prompt拼装.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T08"
+      ]
+    },
+    {
+      "id": "PR-02",
+      "layer": "B",
+      "owner": "modules/M05-年代场景配置与Prompt拼装.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T08"
+      ]
+    },
+    {
+      "id": "PR-03",
+      "layer": "B",
+      "owner": "modules/M05-年代场景配置与Prompt拼装.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T08"
+      ]
+    },
+    {
+      "id": "PR-04",
+      "layer": "B",
+      "owner": "modules/M05-年代场景配置与Prompt拼装.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T08"
+      ]
+    },
+    {
+      "id": "PR-05",
+      "layer": "B",
+      "owner": "modules/M05-年代场景配置与Prompt拼装.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T08"
+      ]
+    },
+    {
+      "id": "PR-06",
+      "layer": "B",
+      "owner": "modules/M05-年代场景配置与Prompt拼装.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T08"
+      ]
+    },
+    {
+      "id": "PR-07",
+      "layer": "B",
+      "owner": "modules/M05-年代场景配置与Prompt拼装.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T08"
+      ]
+    },
+    {
+      "id": "PR-08",
+      "layer": "B",
+      "owner": "modules/M05-年代场景配置与Prompt拼装.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T08"
+      ]
+    },
+    {
+      "id": "PR-09",
+      "layer": "B",
+      "owner": "modules/M05-年代场景配置与Prompt拼装.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T08"
+      ]
+    },
+    {
+      "id": "API-01",
+      "layer": "B",
+      "owner": "spec/03-接口契约.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T01"
+      ]
+    },
+    {
+      "id": "API-02",
+      "layer": "B",
+      "owner": "spec/03-接口契约.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T03"
+      ]
+    },
+    {
+      "id": "API-03",
+      "layer": "B",
+      "owner": "spec/03-接口契约.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T03"
+      ]
+    },
+    {
+      "id": "API-04",
+      "layer": "B",
+      "owner": "spec/03-接口契约.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T03"
+      ]
+    },
+    {
+      "id": "API-05",
+      "layer": "B",
+      "owner": "modules/M08-账号历史与彻底删除.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T12"
+      ]
+    },
+    {
+      "id": "API-06",
+      "layer": "B",
+      "owner": "modules/M05-年代场景配置与Prompt拼装.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T08"
+      ]
+    },
+    {
+      "id": "API-07",
+      "layer": "B",
+      "owner": "modules/M08-账号历史与彻底删除.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T12"
+      ]
+    },
+    {
+      "id": "API-08",
+      "layer": "B",
+      "owner": "spec/03-接口契约.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T18"
+      ]
+    },
+    {
+      "id": "API-09",
+      "layer": "B",
+      "owner": "spec/03-接口契约.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T19"
+      ]
+    },
+    {
+      "id": "E2E-01",
+      "layer": "B",
+      "owner": "modules/M06-生成编排.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T15"
+      ]
+    },
+    {
+      "id": "E2E-02",
+      "layer": "B",
+      "owner": "modules/M06-生成编排.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T06"
+      ]
+    },
+    {
+      "id": "E2E-03",
+      "layer": "B",
+      "owner": "modules/M06-生成编排.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T08"
+      ]
+    },
+    {
+      "id": "E2E-04",
+      "layer": "B",
+      "owner": "modules/M06-生成编排.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T09"
+      ]
+    },
+    {
+      "id": "E2E-05",
+      "layer": "B",
+      "owner": "modules/M06-生成编排.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T10"
+      ]
+    },
+    {
+      "id": "E2E-06",
+      "layer": "B",
+      "owner": "modules/M06-生成编排.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T10"
+      ]
+    },
+    {
+      "id": "E2E-07",
+      "layer": "B",
+      "owner": "modules/M06-生成编排.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T10"
+      ]
+    },
+    {
+      "id": "E2E-08",
+      "layer": "B",
+      "owner": "modules/M06-生成编排.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T10"
+      ]
+    },
+    {
+      "id": "E2E-09",
+      "layer": "B",
+      "owner": "modules/M06-生成编排.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T09"
+      ]
+    },
+    {
+      "id": "E2E-10",
+      "layer": "B",
+      "owner": "modules/M06-生成编排.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T20"
+      ]
+    },
+    {
+      "id": "SEC-01",
+      "layer": "B",
+      "owner": "modules/M04-身份确认与授权.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T07"
+      ]
+    },
+    {
+      "id": "SEC-02",
+      "layer": "B",
+      "owner": "modules/M04-身份确认与授权.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T07"
+      ]
+    },
+    {
+      "id": "SEC-03",
+      "layer": "B",
+      "owner": "modules/M04-身份确认与授权.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T07"
+      ]
+    },
+    {
+      "id": "SEC-04",
+      "layer": "B",
+      "owner": "modules/M06-生成编排.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T09"
+      ]
+    },
+    {
+      "id": "SEC-05",
+      "layer": "B",
+      "owner": "modules/M06-生成编排.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T09"
+      ]
+    },
+    {
+      "id": "SEC-06",
+      "layer": "B",
+      "owner": "modules/M03-身份锚点提取.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T06"
+      ]
+    },
+    {
+      "id": "SEC-07",
+      "layer": "B",
+      "owner": "modules/M08-账号历史与彻底删除.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T12"
+      ]
+    },
+    {
+      "id": "SEC-08",
+      "layer": "B",
+      "owner": "modules/M07-生成后复核与内容审核.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T11"
+      ]
+    },
+    {
+      "id": "SEC-09",
+      "layer": "B",
+      "owner": "modules/M04-身份确认与授权.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T07"
+      ]
+    },
+    {
+      "id": "DEL-01",
+      "layer": "B",
+      "owner": "modules/M08-账号历史与彻底删除.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T13"
+      ]
+    },
+    {
+      "id": "DEL-02",
+      "layer": "B",
+      "owner": "modules/M08-账号历史与彻底删除.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T13"
+      ]
+    },
+    {
+      "id": "DEL-03",
+      "layer": "B",
+      "owner": "modules/M08-账号历史与彻底删除.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T13"
+      ]
+    },
+    {
+      "id": "DEL-04",
+      "layer": "B",
+      "owner": "modules/M08-账号历史与彻底删除.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T13"
+      ]
+    },
+    {
+      "id": "ERR-01",
+      "layer": "B",
+      "owner": "modules/M06-生成编排.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T09"
+      ]
+    },
+    {
+      "id": "ERR-05",
+      "layer": "B",
+      "owner": "modules/M06-生成编排.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T09"
+      ]
+    },
+    {
+      "id": "ERR-02",
+      "layer": "B",
+      "owner": "spec/03-接口契约.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T09"
+      ]
+    },
+    {
+      "id": "ERR-03",
+      "layer": "B",
+      "owner": "spec/03-接口契约.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T05"
+      ]
+    },
+    {
+      "id": "ERR-04",
+      "layer": "B",
+      "owner": "spec/03-接口契约.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T09"
+      ]
+    },
+    {
+      "id": "CMP-01",
+      "layer": "B",
+      "owner": "spec/06-合规与风控.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T10"
+      ]
+    },
+    {
+      "id": "CMP-02",
+      "layer": "B",
+      "owner": "spec/06-合规与风控.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T20"
+      ]
+    },
+    {
+      "id": "CMP-03",
+      "layer": "B",
+      "owner": "spec/06-合规与风控.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T10"
+      ]
+    },
+    {
+      "id": "CMP-04",
+      "layer": "B",
+      "owner": "spec/06-合规与风控.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T10"
+      ]
+    },
+    {
+      "id": "CMP-05",
+      "layer": "B",
+      "owner": "spec/06-合规与风控.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T13"
+      ]
+    },
+    {
+      "id": "PRE-01",
+      "layer": "A",
+      "owner": "modules/M02-预处理与质量评分.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T04"
+      ]
+    },
+    {
+      "id": "PRE-02",
+      "layer": "A",
+      "owner": "modules/M02-预处理与质量评分.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T04"
+      ]
+    },
+    {
+      "id": "PRE-03",
+      "layer": "A",
+      "owner": "modules/M02-预处理与质量评分.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T04"
+      ]
+    },
+    {
+      "id": "PRE-04",
+      "layer": "A",
+      "owner": "modules/M02-预处理与质量评分.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T04"
+      ]
+    },
+    {
+      "id": "PRE-05",
+      "layer": "A",
+      "owner": "modules/M02-预处理与质量评分.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T04"
+      ]
+    },
+    {
+      "id": "PRE-06",
+      "layer": "A",
+      "owner": "modules/M02-预处理与质量评分.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T04"
+      ]
+    },
+    {
+      "id": "PRE-07",
+      "layer": "A",
+      "owner": "modules/M02-预处理与质量评分.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T04"
+      ]
+    },
+    {
+      "id": "PRE-08",
+      "layer": "A",
+      "owner": "modules/M02-预处理与质量评分.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T04"
+      ]
+    },
+    {
+      "id": "PRE-09",
+      "layer": "A",
+      "owner": "modules/M02-预处理与质量评分.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T04"
+      ]
+    },
+    {
+      "id": "PRE-10",
+      "layer": "A",
+      "owner": "modules/M02-预处理与质量评分.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T04"
+      ]
+    },
+    {
+      "id": "PRE-11",
+      "layer": "A",
+      "owner": "modules/M02-预处理与质量评分.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T04"
+      ]
+    },
+    {
+      "id": "PRE-12",
+      "layer": "A",
+      "owner": "modules/M02-预处理与质量评分.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T04"
+      ]
+    },
+    {
+      "id": "MARK-01",
+      "layer": "A",
+      "owner": "spec/06-合规与风控.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T10"
+      ]
+    },
+    {
+      "id": "MARK-02",
+      "layer": "A",
+      "owner": "spec/06-合规与风控.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T10"
+      ]
+    },
+    {
+      "id": "MARK-03",
+      "layer": "A",
+      "owner": "spec/06-合规与风控.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T10"
+      ]
+    },
+    {
+      "id": "MARK-04",
+      "layer": "A",
+      "owner": "spec/06-合规与风控.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T10"
+      ]
+    },
+    {
+      "id": "MARK-05",
+      "layer": "A",
+      "owner": "spec/06-合规与风控.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T10"
+      ]
+    },
+    {
+      "id": "MARK-06",
+      "layer": "A",
+      "owner": "spec/06-合规与风控.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T10"
+      ]
+    },
+    {
+      "id": "MARK-07",
+      "layer": "A",
+      "owner": "spec/06-合规与风控.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T10"
+      ]
+    },
+    {
+      "id": "REV-01",
+      "layer": "B",
+      "owner": "modules/M09-图片反推提示词.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T18"
+      ]
+    },
+    {
+      "id": "REV-02",
+      "layer": "B",
+      "owner": "modules/M09-图片反推提示词.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T18"
+      ]
+    },
+    {
+      "id": "REV-03",
+      "layer": "B",
+      "owner": "modules/M09-图片反推提示词.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T18"
+      ]
+    },
+    {
+      "id": "RN-01",
+      "layer": "B",
+      "owner": "modules/M08-账号历史与彻底删除.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T19"
+      ]
+    },
+    {
+      "id": "RN-02",
+      "layer": "B",
+      "owner": "modules/M08-账号历史与彻底删除.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T19"
+      ]
+    },
+    {
+      "id": "RN-03",
+      "layer": "B",
+      "owner": "modules/M08-账号历史与彻底删除.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm check:acceptance",
+      "tickets": [
+        "T19"
+      ]
+    }
+  ]
+}
