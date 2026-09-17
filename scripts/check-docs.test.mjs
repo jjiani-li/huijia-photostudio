@@ -274,6 +274,117 @@ test('文档树文件数与实际不符被拦下', () => {
   expectFinding(run(prd), { assertion: 'counts-match-registry', needles: ['99'] });
 });
 
+// --------------------------------------------------------------- 9/10/11 单点化
+test('模块文档里复述错误码表（带用户文案列）被拦下', () => {
+  const prd = tree({
+    'modules/M99-夹具模块.md': [
+      '# M99 · 夹具模块',
+      '',
+      '| 错误码 | 触发条件 | 用户可见文案 |',
+      '|---|---|---|',
+      '| `UNAUTHENTICATED` | 未登录 | `请先登录` |',
+      '',
+    ].join('\n'),
+    'spec/03-接口契约.md': [
+      '# 03 · 接口契约',
+      '',
+      '## 5. 错误码总表',
+      '',
+      '| code | HTTP | 触发场景 | 用户可见文案（示例） |',
+      '|---|---|---|---|',
+      '| `UNAUTHENTICATED` | 401 | 未登录 | 请先登录 |',
+      '',
+    ].join('\n'),
+  });
+  expectFinding(run(prd), { assertion: 'error-single-source', needles: ['UNAUTHENTICATED'] });
+});
+
+test('模块文档里复述错误码表（带 HTTP 状态码）被拦下', () => {
+  const prd = tree({
+    'modules/M99-夹具模块.md': [
+      '# M99 · 夹具模块',
+      '',
+      '| 错误码 | 触发条件 | HTTP |',
+      '|---|---|---|',
+      '| `UNAUTHENTICATED` | 未登录 | 401 |',
+      '',
+    ].join('\n'),
+    'spec/03-接口契约.md': [
+      '# 03 · 接口契约',
+      '',
+      '## 5. 错误码总表',
+      '',
+      '| code | HTTP | 触发场景 | 用户可见文案（示例） |',
+      '|---|---|---|---|',
+      '| `UNAUTHENTICATED` | 401 | 未登录 | 请先登录 |',
+      '',
+    ].join('\n'),
+  });
+  expectFinding(run(prd), { assertion: 'error-single-source', needles: ['UNAUTHENTICATED', '401'] });
+});
+
+test('只留触发条件的错误码表通过（唯一事实源在 spec/03 §5）', () => {
+  const prd = tree({
+    'modules/M99-夹具模块.md': [
+      '# M99 · 夹具模块',
+      '',
+      '码与文案的唯一事实源是 `spec/03-接口契约.md` §5。',
+      '',
+      '| 错误码 | 触发条件 |',
+      '|---|---|',
+      '| `UNAUTHENTICATED` | 未登录 |',
+      '',
+    ].join('\n'),
+    'spec/03-接口契约.md': [
+      '# 03 · 接口契约',
+      '',
+      '## 5. 错误码总表',
+      '',
+      '| code | HTTP | 触发场景 | 用户可见文案（示例） |',
+      '|---|---|---|---|',
+      '| `UNAUTHENTICATED` | 401 | 未登录 | 请先登录 |',
+      '',
+    ].join('\n'),
+  });
+  const res = run(prd);
+  assert.equal(res.code, 0, res.out);
+});
+
+test('在别处复述 prompt 长度区间被拦下', () => {
+  const prd = tree({ 'modules/M99-夹具模块.md': '# M99 · 夹具模块\n\nprompt 长度 ∈ [200, 1200] 字符。\n' });
+  expectFinding(run(prd), { assertion: 'threshold-single-source', needles: ['M99-夹具模块.md'] });
+});
+
+test('prompt 长度区间写在 spec/07 里通过', () => {
+  const prd = tree({
+    'spec/07-验收标准.md': spec07('prompt 长度 ∈ [200, 1200] 字符（本文件是唯一阈值声明处）'),
+  });
+  const res = run(prd);
+  assert.equal(res.code, 0, res.out);
+});
+
+test('任务来源说成非「三张表」被拦下', () => {
+  const prd = tree({ 'modules/M99-夹具模块.md': '# M99 · 夹具模块\n\n任务来源是两张任务表。\n' });
+  expectFinding(run(prd), { assertion: 'task-source-single-count', needles: ['两张任务表'] });
+});
+
+test('「与上游文档的差异」章节里引述上游张数不算复述', () => {
+  const prd = tree({
+    'modules/M99-夹具模块.md': [
+      '# M99 · 夹具模块',
+      '',
+      '## 10. 与上游文档的差异',
+      '',
+      '| 上游（`docs/raw/AIGC_PRD.md`） | 本方案 |',
+      '|---|---|',
+      '| 上游把修复与生成拆成两张任务表 | 异步任务表共三张 |',
+      '',
+    ].join('\n'),
+  });
+  const res = run(prd);
+  assert.equal(res.code, 0, res.out);
+});
+
 // --------------------------------------------------------------- 独立运行
 test('不需要环境变量、不依赖产品进程', () => {
   const prd = tree();

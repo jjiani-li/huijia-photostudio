@@ -2,7 +2,7 @@
 /**
  * check:docs —— 文档闸门。
  *
- * 断言 `docs/prd/` 文档树与 `spec/check-registry.json` 自洽，共 8 条：
+ * 断言 `docs/prd/` 文档树与 `spec/check-registry.json` 自洽，共 11 条：
  *   1. ids-unique            检查项 ID 全局唯一
  *   2. single-owner          每个 ID 恰有一个归属文档与一条认领工单
  *   3. no-orphan             每个 ID 至少被一条工单表头认领
@@ -11,7 +11,9 @@
  *   6. refs-resolve          被引用的文件、章节与归属文档都存在
  *   7. index-matches-headers 工单索引的检查项列 ≡ 各工单表头
  *   8. counts-match-registry 文档写出的检查项计数 ≡ 注册表派生值
- *
+ *   9. error-single-source   错误码表只存在于 `spec/03-接口契约.md` §5（不复述状态码与用户文案）
+ *  10. threshold-single-source prompt 长度区间只在 `spec/07-验收标准.md` 声明一次
+ *  11. task-source-single-count 任务来源「几张表」全库只有一个说法（三张） *
  * 只读文件系统，不依赖环境变量、凭证或产品进程。
  * 用法：node scripts/check-docs.mjs [--root <docs/prd>] [--write-index]
  *   --root         指定文档树根（默认 <仓库根>/docs/prd），测试夹具用
@@ -25,6 +27,9 @@
  *   - 根目录下的文件名必须在下面的 ROOT_FILES 白名单里（新增根文件时补一行）。
  *   - 代码路径（`src/**`、`app/**`、`fixtures/**`）由产品工单声明，本仓库尚未实现，
  *     因此只查声明唯一，不查存在。
+ *   - 单点化三条（9–11）按**已知写法**判定：错误码表看「首格是反引号包的错误码」+「含状态码或
+ *     文案列」；阈值看固定的几个字面写法；表数看「任务来源 / 任务表」所在行。换一种写法就能绕过，
+ *     但改契约的写法本身也是改契约，评审会看见。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -478,6 +483,85 @@ for (const f of [...mdFiles, registryPath]) {
   });
 }
 
+// ------------------------------------------------- 断言 9/10/11：契约单点化
+// 断言 9：错误码表只存在于 spec/03 §5
+const errorCodesPath = `${PRD}/spec/03-接口契约.md`;
+const codeStatus = new Map();
+if (fs.existsSync(errorCodesPath)) {
+  for (const line of fs.readFileSync(errorCodesPath, 'utf8').split('\n')) {
+    const cells = line
+      .replace(/\\\|/g, '\u0001')
+      .split('|')
+      .slice(1, -1)
+      .map((c) => c.trim().replace(/\u0001/g, '\\|'));
+    if (cells.length < 3) continue;
+    const code = cells[0].replace(/`/g, '');
+    if (/^[A-Z][A-Z0-9_]{3,}$/.test(code) && /^\d{3}$/.test(cells[1])) codeStatus.set(code, Number(cells[1]));
+  }
+}
+for (const f of mdFiles) {
+  if (path.normalize(f) === path.normalize(errorCodesPath)) continue;
+  const lines = linesOf(f);
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!line.startsWith('|')) continue;
+    const cells = line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+    const code = cells[0]?.replace(/`/g, '');
+    if (code === undefined || !codeStatus.has(code)) continue;
+    const header = lines[i - 2] ?? '';
+    const where = `${rel(f)}:${i + 1}`;
+    if (/文案/.test(header)) {
+      fail('error-single-source', where, `错误码表里复述了用户文案列（${code}）：只能引用 spec/03-接口契约.md §5`);
+    }
+    const status = codeStatus.get(code);
+    if (cells.slice(1).some((c) => c.replace(/`/g, '').trim() === String(status))) {
+      fail(
+        'error-single-source',
+        where,
+        `错误码表里复述了 HTTP 状态码（${code} → ${status}）：只能引用 spec/03-接口契约.md §5`,
+      );
+    }
+  }
+}
+// 断言 10：prompt 长度区间只在 spec/07 声明一次
+const THRESHOLD_RE = /\[\s*200\s*,\s*1200\s*\]|200\s*[–—-]\s*1200|300\s*[–—-]\s*900|低于\s*200|高于\s*1200/;
+const spec07Path = path.join(PRD, 'spec/07-验收标准.md');
+for (const f of mdFiles) {
+  if (path.normalize(f) === path.normalize(spec07Path)) continue;
+  linesOf(f).forEach((line, i) => {
+    if (!THRESHOLD_RE.test(line)) return;
+    if (!/长度|字符|字\b/.test(line)) return;
+    fail(
+      'threshold-single-source',
+      `${rel(f)}:${i + 1}`,
+      '在此处复述了 prompt 长度区间：唯一阈值声明在 spec/07-验收标准.md 的 `PR-07`',
+    );
+  });
+}
+
+// 断言 11：任务来源「几张表」只有一个说法
+// 跳过「与上游文档的差异」类章节——那里会照引上游说法（含被本仓库否定的「两张任务表」）。
+for (const f of mdFiles) {
+  let section = '';
+  linesOf(f).forEach((line, i) => {
+    const heading = line.match(/^#{2,3}\s+(.*)$/);
+    if (heading) {
+      section = heading[1];
+      return;
+    }
+    if (/差异|上游/.test(section)) return;
+    if (!/任务来源|任务表/.test(line)) return;
+    for (const m of line.matchAll(/(?<![上下以])([0-9一二两三四])\s*张(?:任务)?表/g)) {
+      if (m[1] === '三' || m[1] === '3') continue;
+      fail(
+        'task-source-single-count',
+        `${rel(f)}:${i + 1}`,
+        `任务来源必须说「三张表」（identity_anchors / prompt_reverse_jobs / generations），这里写的是「${m[0]}」`,
+      );
+    }
+  });
+}
+
 // ---------------------------------------------------------------- 输出
 if (findings.length) {
   for (const f of findings) console.error(`[${f.assertion}] ${f.where} — ${f.message}`);
@@ -487,5 +571,5 @@ if (findings.length) {
   process.exit(1);
 }
 console.log(
-  `check:docs OK: 8 条断言全绿（注册表 ${derived.total} 项：B ${derived.B} / A ${derived.A}；文档 ${derived.files} 份）`,
+  `check:docs OK: 11 条断言全绿（注册表 ${derived.total} 项：B ${derived.B} / A ${derived.A}；文档 ${derived.files} 份）`,
 );

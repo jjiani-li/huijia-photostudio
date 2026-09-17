@@ -113,9 +113,9 @@ if (override !== null && override.trim() !== "") sections.push(SECTION_PROFILE +
 const prompt = sections.join("\n");
 ```
 
-**段落常量与正文来源**（`src/server/prompt/template.ts`）：七个段落标签常量 `SECTION_IDENTITY`【身份锚点】、`SECTION_AGE`【年龄保真】、`SECTION_ERA`【年代】、`SECTION_SCENE`【场景】、`SECTION_REALISM`【质感】、`SECTION_ERA_FIT`【年代一致】、`SECTION_PROFILE`【组合微调】（条件段落，`PR-09`）。**段落正文不在本文件复制**：模板全文以 `spec/05-Prompt工程.md` §2 为权威副本，`template.ts` 的 `IDENTITY_LEAD`、`AGE_PRESERVE_CLAUSE`、`REALISM_ANCHOR` 逐字符照抄 `spec/05-Prompt工程.md` §2 与 `spec/era-scene-seed.json` 的 `agePreserveClause` / `realismAnchor`，不得改写、不得增删标点；两者不一致时以种子文件为准并同步代码。§2 示意代码里段落之间的空行是 Markdown 折行，**实际分隔符是单个 `\n`**（本条规则 2）。【年龄保真】段是防美化三处落点之一（`spec/05-Prompt工程.md` §4），**不可删除、无开关**。
+**段落常量与正文来源**（`src/server/prompt/template.ts`）：七个段落标签常量 `SECTION_IDENTITY`【身份锚点】、`SECTION_AGE`【年龄保真】、`SECTION_ERA`【年代】、`SECTION_SCENE`【场景】、`SECTION_REALISM`【质感】、`SECTION_ERA_FIT`【年代一致】、`SECTION_PROFILE`【组合微调】（条件段落，`PR-09`）。**段落正文不在本文件复制，也不以任何文档为权威副本**：唯一事实源是代码 `src/server/prompt/template.ts` 的 `IDENTITY_LEAD` / `AGE_PRESERVE_CLAUSE` / `REALISM_ANCHOR`，其中年龄保真句与写实锚定词的取值与 `spec/era-scene-seed.json` 顶层 `agePreserveClause` / `realismAnchor` 逐字符一致（`PR-10` 断言文档与代码等值）；不一致时**以代码为准并同步文档**，不得改写、不得增删标点。§2 示意代码里段落之间的空行是 Markdown 折行，**实际分隔符是单个 `\n`**（本条规则 2）。【年龄保真】段是防美化三处落点之一（`spec/05-Prompt工程.md` §4），**不可删除、无开关**。
 
-**长度断言只 warn 不阻断**：区间 `[200, 1200]` 字符（`PR-07`；`spec/05-Prompt工程.md` §9 的目标区间 300–900 是其建议子集）。超限行为：`logger.warn({ job: 'generate', era: era.code, sceneId: scene.id, length }, 'prompt length out of range')`，**不 throw、不改写文本、不截断**——长度是质量信号而非正确性条件，截断会破坏 `PR-08` 的确定性并把种子数据的问题掩盖成静默降级。
+**长度断言只 warn 不阻断**：长度区间与判定阈值以 `spec/07-验收标准.md` §2 的 `PR-07` 为**唯一声明**，本节不复述数字。超限行为：`logger.warn({ job: 'generate', era: era.code, sceneId: scene.id, length }, 'prompt length out of range')`，**不 throw、不改写文本、不截断**——长度是质量信号而非正确性条件，截断会破坏 `PR-08` 的确定性并把种子数据的问题掩盖成静默降级。
 
 ### 5.2 `size` 从 `eras.default_size` 到 `params_json`
 
@@ -138,14 +138,14 @@ const prompt = sections.join("\n");
 
 ## 6. 边界与错误
 
-错误码必须与 `spec/03-接口契约.md` §5 的「错误码 → 触发条件 → 用户可见文案」逐字符一致。
+码与 HTTP 状态、用户可见文案的唯一事实源是 `spec/03-接口契约.md` §5，本文件只记触发条件、不复述；所列错误码与该表逐字符一致。
 
-| 错误码 | HTTP | 触发条件 | 用户可见文案 |
-|---|---|---|---|
-| `UNAUTHENTICATED` | 401 | 未登录或会话过期访问 `GET /api/config/era-scene` | 请先登录 |
-| `INVALID_PARAM` | 400 | `eraCode` / `sceneId` 在 `eras` / `scenes` 中不存在，或该行 `is_active = 0`（`spec/03-接口契约.md` §3.5） | 选择有误，请重新选一下 |
-| `ANCHOR_NOT_CONFIRMED` | 409 | 锚点虽为 `succeeded` 但 `anchor_text` 为空——`spec/01-领域模型与数据库.md` §2.1 的锚点可用性不变量被破坏 | 需要先确认"这就是他"，才能开始生成 |
-| `INTERNAL` | 500 | `eras.default_size` 解析失败，或总像素低于 3,686,400 / 高于 16,777,216 / 宽高比越界（内部拼装 bug，`spec/03-接口契约.md` §5.1） | 出了点小问题，请重试 |
+| 错误码 | 触发条件 |
+|---|---|
+| `UNAUTHENTICATED` | 未登录或会话过期访问 `GET /api/config/era-scene` |
+| `INVALID_PARAM` | `eraCode` / `sceneId` 在 `eras` / `scenes` 中不存在，或该行 `is_active = 0`（`spec/03-接口契约.md` §3.5） |
+| `ANCHOR_NOT_CONFIRMED` | 锚点虽为 `succeeded` 但 `anchor_text` 为空——`spec/01-领域模型与数据库.md` §2.1 的锚点可用性不变量被破坏 |
+| `INTERNAL` | `eras.default_size` 解析失败，或总像素低于 3,686,400 / 高于 16,777,216 / 宽高比越界（内部拼装 bug，`spec/03-接口契约.md` §5.1） |
 
 边界行为（不报错）：
 
@@ -173,7 +173,7 @@ const prompt = sections.join("\n");
 
 单元测试（`pnpm test`，vitest）：
 
-- `build.test.ts`：20 组 `(eraCode, sceneId)` 均含 6 个固定段落标签且 `indexOf` 严格递增；对 `/不要|禁止|no\s|without/` 零命中；均含 `不做任何美化` 与 `减龄`；E1 的 5 组含 `黑白`、E3 / E4 的 10 组不含 `胶片`；长度 ∈ [200, 1200] 且越界时 mock 的 `logger.warn` 被调用而不抛错；同输入两次 `prompt` 与 `promptHash` 全等（64 位小写十六进制）、段间为单个 `\n`、含换行的 `anchorText` 原样保留；`promptOverride === null` 时不含 `【组合微调】`、非 `null` 时必须含且在末尾。
+- `build.test.ts`：20 组 `(eraCode, sceneId)` 均含 6 个固定段落标签且 `indexOf` 严格递增；对 `/不要|禁止|no\s|without/` 零命中；均含 `不做任何美化` 与 `减龄`；E1 的 5 组含 `黑白`、E3 / E4 的 10 组不含 `胶片`；长度落在 `PR-07` 的区间内、越界时 mock 的 `logger.warn` 被调用而不抛错；同输入两次 `prompt` 与 `promptHash` 全等（64 位小写十六进制）、段间为单个 `\n`、含换行的 `anchorText` 原样保留；`promptOverride === null` 时不含 `【组合微调】`、非 `null` 时必须含且在末尾。
 - `config.test.ts`：返回 4 / 5 / 20 行、`is_active = 0` 的行不出现、`eras.sort_order` 为 1,2,3,4；`db.prepare` 总执行次数为 3（无 N+1）；`samplePhoto` 要么是 `/samples/` 开头的路径字符串、要么是 `null`，不做任何拼接（**本期全为 `null`**，断言 4 / 5 / 20 行全部为 `null`）。
 - `generationService.test.ts`：`2048x2048` 通过，`1024x1024` / `1000x3686` 抛 `INTERNAL`；`template_version='tpl-v1'` 且两个 pack 版本取行值；`anchorText` 为空 → `ANCHOR_NOT_CONFIRMED`。
 

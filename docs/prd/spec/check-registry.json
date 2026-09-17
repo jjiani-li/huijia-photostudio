@@ -789,6 +789,16 @@
       ]
     },
     {
+      "id": "PR-10",
+      "layer": "A",
+      "owner": "modules/M05-年代场景配置与Prompt拼装.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T08"
+      ]
+    },
+    {
       "id": "REV-01",
       "layer": "B",
       "owner": "modules/M09-图片反推提示词.md",

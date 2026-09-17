@@ -5,7 +5,7 @@
 | 阶段 | M2 |
 | 依赖 | `T02` |
 | 必读文档 | `modules/M05-年代场景配置与Prompt拼装.md`、`spec/05-Prompt工程.md` |
-| 检查项 | `PR-01`–`PR-09`、`E2E-03`、`API-06` |
+| 检查项 | `PR-01`–`PR-10`、`E2E-03`、`API-06` |
 
 ## 1. 目标
 三张配置表安全下发给前端（不含任何 prompt 正文），并把「身份锚点 + 年代包 + 场景包 + 模板常量 + 组合微调」拼成唯一可复现的 prompt，落 `generations` 的拼装列。
@@ -34,12 +34,12 @@
 ```bash
 pnpm test && pnpm check:acceptance
 ```
-- `PR-01`–`PR-09`（20 组断言见 `modules/M05-年代场景配置与Prompt拼装.md` §8）与 `API-06`；`DB-06`（`version` == 种子顶层 `version`）随本条 `SEED_VERSION` 与种子对齐后转绿；通用项见 `spec/07-验收标准.md` §5。
+- `PR-01`–`PR-10`（20 组断言见 `modules/M05-年代场景配置与Prompt拼装.md` §8；`PR-10` 是文档与代码等值：`spec/05-Prompt工程.md` §2 的示意块与 `src/server/prompt/template.ts` 逐字符等值，以代码为准）与 `API-06`；`DB-06`（`version` == 种子顶层 `version`）随本条 `SEED_VERSION` 与种子对齐后转绿；通用项见 `spec/07-验收标准.md` §5。
 
 ## 6. 待定决策
 无。
 ## Comments
 
-- [待定决策] prompt 长度有三套阈值——`spec/05-Prompt工程.md` §9"建议 300–900、低于 200 不足、高于 1200 稀释" vs `spec/07-验收标准.md` `PR-07`"[200, 1200]"，而 `spec/09-施工纪律.md` D5 禁止改数字阈值。→ 只保留一处定义（建议以 `PR-07` 为唯一阈值），`spec/05` §9 改为引用。
-- [待定决策] `realismAnchor` / `agePreserveClause` / `confidenceHintThreshold` / `version` 是 `spec/era-scene-seed.json` 的顶层字段，不属于任何表，`pnpm seed` 也不写它们；而 `spec/03-接口契约.md` §3.4 要求下发 `realismAnchor` 与 `confidenceHintThreshold`。→ 明确由 `src/server/prompt/versions.ts` 导出这三个常量（与 `SEED_VERSION` 同处），并加 A 层断言"与种子文件顶层字段逐字符一致"。
-- [待定决策] `modules/M05-年代场景配置与Prompt拼装.md` §5.1 同时声明"模板全文以 `spec/05-Prompt工程.md` §2 为权威副本"与"两者不一致时以种子文件为准"，加上 `template.ts`，同一份 prompt 正文有三个候选事实源。→ 定为一个：代码 `template.ts` 为唯一事实源，`spec/05` 只写结构，并加等值断言。
+- [已收口] **prompt 长度阈值单点化**：唯一声明是 `spec/07-验收标准.md` §2 的 `PR-07`；`spec/05-Prompt工程.md` §9、`modules/M05-年代场景配置与Prompt拼装.md` §5.1/§8 已改为引用，不再复述数字。契约级分歧不再记为 ticket 待定决策（`spec/09-施工纪律.md` §5 第 5 条、D13），闸门的 `threshold-single-source` 断言守住这条。
+- [已收口] **prompt 正文的事实源**：唯一事实源是代码 `src/server/prompt/template.ts`（段落标签常量与 `IDENTITY_LEAD` / `AGE_PRESERVE_CLAUSE` / `REALISM_ANCHOR`，种子侧取值见 `spec/era-scene-seed.json` 顶层），`spec/05-Prompt工程.md` §2 只写结构与约束；文档与代码的逐字符等值由 `PR-10` 断言（A 层，本条实现）。
+- [已定] `realismAnchor` / `agePreserveClause` / `confidenceHintThreshold` / `version` 是 `spec/era-scene-seed.json` 的顶层字段，不属于任何表、`pnpm seed` 也不写它们，而 `spec/03-接口契约.md` §3.4 要求下发 `realismAnchor` 与 `confidenceHintThreshold`。→ 由 `src/server/prompt/versions.ts` 导出这三个常量（与 `SEED_VERSION` 同处），并加 A 层断言「与种子文件顶层字段逐字符一致」。
