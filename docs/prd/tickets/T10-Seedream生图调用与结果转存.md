@@ -24,7 +24,7 @@ worker 拿到 `generations` 任务后调上游生图、逐张**立即转存**、
 | `fixtures/images/*`、`scripts/acceptance.ts`、`src/server/db/repositories/audit.ts` | 修改 | 生图回放样本与 `E2E-05`–`E2E-08` 执行；`photo.mark` 审计 | `spec/08-本地开发指南.md` §5.1 |
 
 ## 4. 实现要点
-1. 转存顺序固定：上游 `data[].url` 下载 → `markGeneratedImage()` → `LocalStorageProvider` 先写 `.tmp` 再 rename → 插 `photos(kind='generated', bytes=marked.length)` → 插 `audit_logs('photo.mark')`（`spec/06-合规与风控.md` §3.3）。
+1. 转存按 `spec/06-合规与风控.md` §3.3 的固定序列执行（下载 → 探宽高 → 写隐式标识 → 原子落盘 → 插行），本文件不复述；本条只补两处取值：`photos.width` / `height` 用 `probeImage()` 的**实测值**（不得写请求的 `size`），`photos.bytes` 取标识写入**之后**的长度（见第 2 条）。。
 2. `photos.bytes` 必须取标识写入**之后**的长度（否则 `E2E-06` 失败）；标识写入失败**不**置任务失败，写 `mode='failed'` 审计并照常交付未标记文件。
 3. `ordinal` 从 0 连续递增；`count > 1` 时请求体带 `sequential_image_generation: 'auto'` 与 `max_images`；签名 URL（86400s）必须立即转存，**不得入库**。
 4. 终态、额度回滚与 `audit_logs('generation.finish')` 按 `modules/M06-生成编排.md` §5.3、§5.6 在同一事务内完成；handler 捕获全部异常，不抛 `AppError`。

@@ -16,6 +16,8 @@
  *  11. task-source-single-count 任务来源「几张表」全库只有一个说法（三张）
  *  12. retired-terms        禁止裸写旧词（面部特征锚点 / 场景代号 / anchor_text 的旧区间），
  *                            并要求两个判定在定义处与归属模块都点名（eraCheckVerdict / moderationVerdict）
+ *  13. unverified-caps      未验证的上游能力集中登记在 `spec/07` §6（逐行标「未验证」），
+ *                            别处不许再留一句「待真机验证」这类一次性对冲
  * 只读文件系统，不依赖环境变量、凭证或产品进程。
  * 用法：node scripts/check-docs.mjs [--root <docs/prd>] [--write-index]
  *   --root         指定文档树根（默认 <仓库根>/docs/prd），测试夹具用
@@ -647,7 +649,7 @@ for (const [file, needles] of [
 // ------------------------------------------------- 断言 13：未验证的上游能力必须集中登记
 // spec/07 §6 的「未验证的上游能力」块是唯一的登记处：块内每行都要带「未验证」标记，
 // 且别处不许再留「尚待真机验证」这类一次性对冲（那会让同一条能力在多处各说一遍）。
-const HEDGE_RE = /尚待真机验证|待真机验证|尚未验证|尚待验证/;
+const HEDGE_RE = /尚待真机验证|待真机验证|尚未验证|尚待验证|未经实测|待实测/;
 const spec07Lines = linesOf(spec07Path);
 const blockStart = spec07Lines.findIndex((l) => /未验证的上游能力/.test(l));
 if (blockStart === -1) {
