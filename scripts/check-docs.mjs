@@ -13,8 +13,8 @@
  *   8. counts-match-registry 文档写出的检查项计数 ≡ 注册表派生值
  *   9. error-single-source   错误码表只存在于 `spec/03-接口契约.md` §5（不复述状态码与用户文案）
  *  10. threshold-single-source prompt 长度区间只在 `spec/07-验收标准.md` 声明一次
- *  11. task-source-single-count 任务来源「几张表」全库只有一个说法（三张） *
- * 只读文件系统，不依赖环境变量、凭证或产品进程。
+ *  11. task-source-single-count 任务来源「几张表」全库只有一个说法（三张）
+ * * 只读文件系统，不依赖环境变量、凭证或产品进程。
  * 用法：node scripts/check-docs.mjs [--root <docs/prd>] [--write-index]
  *   --root         指定文档树根（默认 <仓库根>/docs/prd），测试夹具用
  *   --write-index  按工单表头重写 tickets/README.md 的检查项列（其余断言照跑）
@@ -81,6 +81,25 @@ const findings = [];
 const fail = (assertion, where, message) => findings.push({ assertion, where, message });
 const rel = (p) => path.relative(REPO, p).split(path.sep).join('/') || '.';
 const norm = (s) => s.replace(/\s+/g, ' ').trim();
+
+/** Markdown 表格行 → 单元格（考虑 `\|` 转义；首尾空串去掉）。 */
+const tableCells = (line) =>
+  line
+    .replace(/\\\|/g, '\u0001')
+    .replace(/^\s*\|/, '')
+    .replace(/\|\s*$/, '')
+    .split('|')
+    .map((c) => c.trim().replace(/\u0001/g, '\\|'));
+
+/** 表格行的表头：向上找到最近的 `|---|` 分隔行，取它上面那一行。 */
+const tableHeader = (lines, i) => {
+  for (let k = i - 1; k >= 0; k -= 1) {
+    const l = lines[k];
+    if (/^\|[\s:|-]+\|$/.test(l.trim())) return lines[k - 1] ?? '';
+    if (!l.startsWith('|')) break;
+  }
+  return '';
+};
 
 const walk = (dir) =>
   fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -158,11 +177,7 @@ if (fs.existsSync(authorityPath)) {
     const h = line.match(/^### (2\.\d+)/);
     if (h) section = h[1];
     if (!line.startsWith('|')) return;
-    const cells = line
-      .replace(/\\\|/g, '\u0001')
-      .split('|')
-      .slice(1, -1)
-      .map((c) => c.trim().replace(/\u0001/g, '\\|'));
+    const cells = tableCells(line);
     if (cells.length !== 5) return;
     const idm = cells[0].match(/^`([A-Z][A-Z0-9]{1,3}-\d{2})`$/);
     if (!idm) return;
@@ -485,41 +500,60 @@ for (const f of [...mdFiles, registryPath]) {
 
 // ------------------------------------------------- 断言 9/10/11：契约单点化
 // 断言 9：错误码表只存在于 spec/03 §5
-const errorCodesPath = `${PRD}/spec/03-接口契约.md`;
+// 判定两件事：(a) 首列是错误码的表格，不得再有「HTTP / 状态」列或「文案」列；
+// (b) 任何单元格的值不得是「错误码 + 它自己的状态码」（`401 UNAUTHENTICATED`、`CODE / 409`）。
+// 表格行里的正常叙述（如验收项「→ `409 ANCHOR_NOT_CONFIRMED`」）不算复述。
+const errorCodesPath = path.join(PRD, 'spec/03-接口契约.md');
 const codeStatus = new Map();
 if (fs.existsSync(errorCodesPath)) {
-  for (const line of fs.readFileSync(errorCodesPath, 'utf8').split('\n')) {
-    const cells = line
-      .replace(/\\\|/g, '\u0001')
-      .split('|')
-      .slice(1, -1)
-      .map((c) => c.trim().replace(/\u0001/g, '\\|'));
-    if (cells.length < 3) continue;
+  for (const line of linesOf(errorCodesPath)) {
+    const cells = tableCells(line);
+    if (cells.length < 2) continue;
     const code = cells[0].replace(/`/g, '');
     if (/^[A-Z][A-Z0-9_]{3,}$/.test(code) && /^\d{3}$/.test(cells[1])) codeStatus.set(code, Number(cells[1]));
   }
 }
+if (fs.existsSync(errorCodesPath) && codeStatus.size === 0) {
+  fail('error-single-source', rel(errorCodesPath), '解析不出错误码表（列序变了？）——本断言会退化成空转，先修这里');
+}
+const CELL_IS_CODE_WITH_STATUS = (cell) => {
+  const raw = cell.replace(/`/g, '').trim();
+  for (const [code, status] of codeStatus) {
+    if (!raw.includes(code)) continue;
+    const rest = raw.replace(code, '').replace(/[\s/、,（()）]+/g, '');
+    if (rest === '') return null; // 只写码、没写状态码，不算复述
+    if (rest === String(status)) return { code, status };
+  }
+  return null;
+};
 for (const f of mdFiles) {
   if (path.normalize(f) === path.normalize(errorCodesPath)) continue;
   const lines = linesOf(f);
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
     if (!line.startsWith('|')) continue;
-    const cells = line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+    const cells = tableCells(line);
+    const where = `${rel(f)}:${i + 1}`;
+    // (b) 单元格 = 码 + 状态码
+    for (const cell of cells) {
+      const hit = CELL_IS_CODE_WITH_STATUS(cell);
+      if (hit) {
+        fail(
+          'error-single-source',
+          where,
+          `单元格里复述了 HTTP 状态码（${hit.code} → ${hit.status}）：只能引用 spec/03-接口契约.md §5`,
+        );
+      }
+    }
+    // (a) 首列是错误码的表：不得有状态码列或文案列
     const code = cells[0]?.replace(/`/g, '');
     if (code === undefined || !codeStatus.has(code)) continue;
-    const header = lines[i - 2] ?? '';
-    const where = `${rel(f)}:${i + 1}`;
+    const header = tableHeader(lines, i);
     if (/文案/.test(header)) {
       fail('error-single-source', where, `错误码表里复述了用户文案列（${code}）：只能引用 spec/03-接口契约.md §5`);
     }
-    const status = codeStatus.get(code);
-    if (cells.slice(1).some((c) => c.replace(/`/g, '').trim() === String(status))) {
-      fail(
-        'error-single-source',
-        where,
-        `错误码表里复述了 HTTP 状态码（${code} → ${status}）：只能引用 spec/03-接口契约.md §5`,
-      );
+    if (/HTTP|状态码/.test(header)) {
+      fail('error-single-source', where, `错误码表里复述了 HTTP 状态列（${code}）：只能引用 spec/03-接口契约.md §5`);
     }
   }
 }
@@ -551,7 +585,9 @@ for (const f of mdFiles) {
     }
     if (/差异|上游/.test(section)) return;
     if (!/任务来源|任务表/.test(line)) return;
-    for (const m of line.matchAll(/(?<![上下以])([0-9一二两三四])\s*张(?:任务)?表/g)) {
+    // 「下一张表 / 上一张表」是「邻接的那张表」，不是张数声明，先摘掉再数
+    const stripped = line.replace(/[上下]一张表/g, '');
+    for (const m of stripped.matchAll(/([0-9一二两三四])\s*张(?:任务)?表/g)) {
       if (m[1] === '三' || m[1] === '3') continue;
       fail(
         'task-source-single-count',

@@ -83,7 +83,7 @@ Status: ready-for-agent
 | 目录与文件命名 | `spec/04-技术基线与目录结构.md §2` |
 | 术语定义 | `CONTEXT.md` |
 | 检查项注册表 | `spec/check-registry.json`（新建） |
-| 错误码 → 用户文案 | `pages/P00-设计基准与路由.md §8` |
+| 错误码 → 用户文案 | `spec/03-接口契约.md` §5（服务端 `error.message` 即用户可见文案；`pages/P00-设计基准与路由.md` §8 只定义呈现形态与附加动作） |
 
 - `M01`–`M09` 各自复述的错误码表体删除，只留指向 `spec/03 §5` 的引用。
 - `spec/05-Prompt工程.md` 只写 prompt 的结构与约束，正文以代码为唯一事实源，加"文档与代码等值"断言。

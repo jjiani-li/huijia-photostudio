@@ -320,7 +320,7 @@ test('模块文档里复述错误码表（带 HTTP 状态码）被拦下', () =>
       '',
     ].join('\n'),
   });
-  expectFinding(run(prd), { assertion: 'error-single-source', needles: ['UNAUTHENTICATED', '401'] });
+  expectFinding(run(prd), { assertion: 'error-single-source', needles: ['UNAUTHENTICATED', 'HTTP'] });
 });
 
 test('只留触发条件的错误码表通过（唯一事实源在 spec/03 §5）', () => {
@@ -343,6 +343,56 @@ test('只留触发条件的错误码表通过（唯一事实源在 spec/03 §5�
       '| code | HTTP | 触发场景 | 用户可见文案（示例） |',
       '|---|---|---|---|',
       '| `UNAUTHENTICATED` | 401 | 未登录 | 请先登录 |',
+      '',
+    ].join('\n'),
+  });
+  const res = run(prd);
+  assert.equal(res.code, 0, res.out);
+});
+
+test('单元格里把状态码与错误码粘在一起被拦下', () => {
+  const prd = tree({
+    'modules/M99-夹具模块.md': [
+      '# M99 · 夹具模块',
+      '',
+      '| 场景 | 错误码 |',
+      '|---|---|',
+      '| 未登录 | `401 UNAUTHENTICATED` |',
+      '',
+    ].join('\n'),
+    'spec/03-接口契约.md': [
+      '# 03 · 接口契约',
+      '',
+      '## 5. 错误码总表',
+      '',
+      '| code | HTTP | 触发场景 | 用户可见文案（示例） |',
+      '|---|---|---|---|',
+      '| `UNAUTHENTICATED` | 401 | 未登录 | 请先登录 |',
+      '',
+    ].join('\n'),
+  });
+  expectFinding(run(prd), { assertion: 'error-single-source', needles: ['401', 'UNAUTHENTICATED'] });
+});
+
+test('验收项叙述里的「→ 409 CODE」不算复述', () => {
+  const prd = tree({
+    'spec/07-验收标准.md': spec07(''),
+    'modules/M99-夹具模块.md': [
+      '# M99 · 夹具模块',
+      '',
+      '| 检查 | 判定 |',
+      '|---|---|',
+      '| 未确认的锚点发起生成 → `409 ANCHOR_NOT_CONFIRMED` | 通过 |',
+      '',
+    ].join('\n'),
+    'spec/03-接口契约.md': [
+      '# 03 · 接口契约',
+      '',
+      '## 5. 错误码总表',
+      '',
+      '| code | HTTP | 触发场景 | 用户可见文案（示例） |',
+      '|---|---|---|---|',
+      '| `ANCHOR_NOT_CONFIRMED` | 409 | 未确认 | 需要先确认"这就是他" |',
       '',
     ].join('\n'),
   });
