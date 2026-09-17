@@ -1,0 +1,196 @@
+{
+  "version": "seed-v1",
+  "note": "权威种数据。pnpm seed 读取本文件，幂等 upsert 到 eras / scenes / era_scene_profiles。修改请先改本文件并递增对应 packVersion，再执行 pnpm seed。",
+  "source": "docs/raw/AIGC_PRD.md §5.2 / §5.3 / §5.4",
+  "realismAnchor": "真实照片，随手拍的生活照，自然皮肤纹理，可见毛孔与细纹，真实肤色不均，柔和的对比度，构图自然不刻意",
+  "agePreserveClause": "严格保留人物的真实年龄特征：保持源照片中已有的深皱纹、法令纹、眼角纹、老年斑与皮肤松弛，不做任何美化、磨皮与减龄处理；面部结构、脸型与体型比例不做任何修饰。",
+  "confidenceHintThreshold": 0.6,
+
+  "eras": [
+    {
+      "code": "E1",
+      "name": "50-70年代",
+      "slug": "1950s-1970s",
+      "isMono": true,
+      "defaultSize": "2048x2048",
+      "caption": "黑白照，稍微泛黄，像老一辈压在箱底的那张相片",
+      "packVersion": "v1",
+      "sortOrder": 1,
+      "styleJson": {
+        "tone": "黑白影调，仅极轻微泛黄，全画面无彩色",
+        "grain": "明显胶片颗粒、细小划痕与灰点，四角轻微暗角",
+        "dynamicRange": "高光容易过曝，暗部压得很深，反差大",
+        "equipment": "中画幅或双反相机，固定焦段，浅景深",
+        "composition": "人物居中端正",
+        "wardrobe": "中山装、列宁装、工装"
+      },
+      "promptPack": "1950 至 1970 年代的黑白胶片照片，黑白影调，仅极轻微泛黄，全画面无彩色，明显胶片颗粒与细小划痕、灰点，四角轻微暗角，高光容易过曝、暗部压得很深、反差大，中画幅或双反相机拍摄，固定焦段，人物居中端正",
+      "constraintPack": "画面中的服饰、发型、建筑、陈设与道具必须属于 1950—1970 年代或更早；黑白照片，全画面无彩色，仅极轻微泛黄；画面中不出现任何彩色元素、塑料日用品、家用电器与现代印刷品；通讯与记录设备只能是那个年代的样式，或画面中不存在通讯设备"
+    },
+    {
+      "code": "E2",
+      "name": "80-90年代",
+      "slug": "1980s-1990s",
+      "isMono": false,
+      "defaultSize": "2048x2048",
+      "caption": "彩色胶卷，颜色有点偏，颗粒明显，照相馆和老院子的年代",
+      "packVersion": "v1",
+      "sortOrder": 2,
+      "styleJson": {
+        "tone": "偏青或偏暖红，色彩浓郁但不艳丽，有轻微偏色",
+        "grain": "明显彩色颗粒、轻微色染、边缘轻微色散",
+        "dynamicRange": "中等反差，闪光灯直打时高光轻微溢出",
+        "equipment": "135 胶片机或傻瓜相机，变焦，直出",
+        "composition": "随意的生活抓拍",
+        "wardrobe": "的确良衬衫、军绿色、运动服"
+      },
+      "promptPack": "1980 至 1990 年代的彩色胶卷照片，135 胶片质感，色彩偏青或偏暖红、浓郁但不艳丽，明显彩色颗粒与轻微色染，边缘轻微色散，闪光灯直打时高光轻微溢出，傻瓜相机直出",
+      "constraintPack": "画面中的服饰、发型、建筑、陈设与道具必须属于 1980—1990 年代或更早；画面中的通讯设备为 1980 年代常见的固定电话，或画面中不存在通讯设备；背景建筑为 1980—1990 年代的砖混楼房，外墙为水泥或马赛克贴面；不出现智能手机、液晶屏、现代楼宇玻璃幕墙与现代汽车外观"
+    },
+    {
+      "code": "E3",
+      "name": "00年代",
+      "slug": "2000s",
+      "isMono": false,
+      "defaultSize": "2048x2048",
+      "caption": "早期数码相机拍的，颜色有点灰，闪光灯一打脸就白了",
+      "packVersion": "v1",
+      "sortOrder": 3,
+      "styleJson": {
+        "tone": "色调略灰，白平衡偏冷或偏绿",
+        "grain": "数码噪点明显，轻微紫边",
+        "dynamicRange": "反差偏高，闪光灯压脸，高光明显溢出",
+        "equipment": "卡片机或早期手机，直出 JPEG，锐化略过度",
+        "composition": "随手拍，构图随意",
+        "wardrobe": "运动服、塑料椅"
+      },
+      "promptPack": "2000 年代早期数码相机或早期手机拍摄的照片，色调略灰、白平衡偏冷或偏绿，数码噪点明显，动态范围偏低，闪光灯压脸、高光明显溢出，直出 JPEG 略带锐化过度",
+      "constraintPack": "画面中的服饰、发型、建筑、陈设与道具必须属于 2000 年代或更早；画面中的拍摄与显示设备为当时的卡片机、CRT 显示器或早期功能手机样式；室内装修与家具为 2000 年代样式；不出现全面屏手机、电动车与现代装修风格"
+    },
+    {
+      "code": "E4",
+      "name": "2010-2020年代",
+      "slug": "2010s-2020s",
+      "isMono": false,
+      "defaultSize": "2048x2048",
+      "caption": "手机随手拍的，通透清晰，看着就像昨天拍的",
+      "packVersion": "v1",
+      "sortOrder": 4,
+      "styleJson": {
+        "tone": "白平衡基本准确但不完美，色彩自然略显平淡，不做浓艳调色",
+        "grain": "画面通透、细节清晰，带手机算法轻微的降噪与锐化痕迹",
+        "dynamicRange": "动态范围较高，天空高光轻微溢出，暗部保留细节",
+        "equipment": "手机主摄，自动模式，随手拍",
+        "composition": "构图随意，有生活感",
+        "wardrobe": "现代休闲装、运动鞋"
+      },
+      "promptPack": "2010 至 2020 年代智能手机拍摄的日常照片，手机随手拍，白平衡基本准确但不完美，色彩自然略显平淡，不做浓艳调色，画面通透、细节清晰，天空高光有轻微溢出，暗部保留细节，带有手机算法轻微的降噪与锐化痕迹，构图随意、有生活感",
+      "constraintPack": "画面中的服饰、发型、建筑、陈设与道具必须属于 2010—2020 年代或更早；画面为智能手机随手拍的日常质感，人物姿态自然放松；不出现明显未来感或科幻元素"
+    }
+  ],
+
+  "scenes": [
+    {
+      "code": "S1",
+      "name": "老式照相馆",
+      "slug": "old-studio",
+      "category": "studio",
+      "caption": "当年街口那家照相馆，布景布、假花、铁椅子",
+      "packVersion": "v1",
+      "sortOrder": 1,
+      "spacePack": "老式照相馆室内，深色布景幕布与木质背景板，铁艺椅，旁边摆放假花与木质相框，影棚顶灯加相机直闪、硬光，人物正面受光、背景略暗，正面半身、居中、略显拘谨的摆拍构图"
+    },
+    {
+      "code": "S2",
+      "name": "农村院子",
+      "slug": "rural-yard",
+      "category": "outdoor",
+      "caption": "老家院子里，土墙木门，柴垛水缸",
+      "packVersion": "v1",
+      "sortOrder": 2,
+      "spacePack": "农村院子，土墙、木门、柴垛、水缸，自然日光或阴天散射光，平视视角，人物略偏画面一侧，石磨、竹筐、晾衣绳等物件"
+    },
+    {
+      "code": "S3",
+      "name": "城市公园",
+      "slug": "city-park",
+      "category": "outdoor",
+      "caption": "公园里边，草坪树荫，长椅步道",
+      "packVersion": "v1",
+      "sortOrder": 3,
+      "spacePack": "城市公园，草坪与河道或湖面、成排树木、长椅、步道与铁栏杆，自然日光或阴天散射光，远中近景层次清晰，人物与环境自然融合，平视或略仰视的日常拍摄视角"
+    },
+    {
+      "code": "S4",
+      "name": "家庭客厅",
+      "slug": "living-room",
+      "category": "indoor",
+      "caption": "家里客厅，沙发挂历，灯光暖暖的",
+      "packVersion": "v1",
+      "sortOrder": 4,
+      "spacePack": "家庭客厅，沙发、五斗柜、电视柜、墙上挂历，室内灯或窗光，生活抓拍视角，人物处在日常居家的自然状态"
+    },
+    {
+      "code": "S5",
+      "name": "工作单位门口",
+      "slug": "workplace-gate",
+      "category": "workplace",
+      "caption": "单位大门口，站在门口拍一张",
+      "packVersion": "v1",
+      "sortOrder": 5,
+      "spacePack": "工作单位门口，单位大门、标语墙、传达室，日光或逆光，站姿合影构图，门口环境自然，人物自然站立"
+    }
+  ],
+
+  "eraSceneProfiles": [
+    { "eraCode": "E1", "sceneCode": "S1", "confidence": 0.95, "promptOverride": null,
+      "visualSignature": "黑白硬闪光，布景幕布背景，高光过曝，人物居中端正，证件式合影的拘谨感" },
+    { "eraCode": "E2", "sceneCode": "S1", "confidence": 0.95, "promptOverride": null,
+      "visualSignature": "彩色胶卷，影楼布景加假花，闪光灯直打，色彩偏红，布幕质感明显" },
+    { "eraCode": "E3", "sceneCode": "S1", "confidence": 0.55, "promptOverride": null,
+      "visualSignature": "早期数码，白平衡偏灰，直闪压脸，布景已显廉价" },
+    { "eraCode": "E4", "sceneCode": "S1", "confidence": 0.2,
+      "promptOverride": "室内混合光环境，白平衡偏黄，背景布景略显陈旧杂乱，画面带有手机随手抓拍的不经意感",
+      "visualSignature": "照相馆已少见；若拍摄则为手机随手拍，室内混合光、白平衡偏黄，背景略显杂乱" },
+
+    { "eraCode": "E1", "sceneCode": "S2", "confidence": 0.85, "promptOverride": null,
+      "visualSignature": "黑白，土墙高反差，日光硬阴影，颗粒粗" },
+    { "eraCode": "E2", "sceneCode": "S2", "confidence": 0.9, "promptOverride": null,
+      "visualSignature": "彩色胶卷，土墙泛青，日光柔和，色彩浓郁" },
+    { "eraCode": "E3", "sceneCode": "S2", "confidence": 0.35, "promptOverride": null,
+      "visualSignature": "数码感，土墙偏灰，动态范围低，天空易死白" },
+    { "eraCode": "E4", "sceneCode": "S2", "confidence": 0.6,
+      "promptOverride": "院子里已有水泥地或瓷砖地面，色彩自然、细节清晰，天光平淡",
+      "visualSignature": "手机拍摄，院子已有水泥地或瓷砖，色彩自然、细节清晰，天光平淡" },
+
+    { "eraCode": "E1", "sceneCode": "S3", "confidence": 0.7, "promptOverride": null,
+      "visualSignature": "黑白，树影反差强，湖面高光过曝" },
+    { "eraCode": "E2", "sceneCode": "S3", "confidence": 0.85, "promptOverride": null,
+      "visualSignature": "彩色胶卷，树叶偏青绿，阳光斑驳，颗粒明显" },
+    { "eraCode": "E3", "sceneCode": "S3", "confidence": 0.8, "promptOverride": null,
+      "visualSignature": "数码噪点，树影发灰，色彩平淡，边缘紫边" },
+    { "eraCode": "E4", "sceneCode": "S3", "confidence": 0.95,
+      "promptOverride": "阴天漫射光，草坪与步道细节清晰，远处有现代楼宇，天空高光轻微溢出",
+      "visualSignature": "手机随手拍，阴天漫射光，草坪与步道细节清晰，远处现代楼宇，天空高光轻微溢出" },
+
+    { "eraCode": "E1", "sceneCode": "S4", "confidence": 0.5, "promptOverride": null,
+      "visualSignature": "黑白，室内灯光昏暗，暗部死黑，窗光成高光" },
+    { "eraCode": "E2", "sceneCode": "S4", "confidence": 0.8, "promptOverride": null,
+      "visualSignature": "彩色胶卷，钨丝灯偏黄，闪光灯反光，色彩饱和" },
+    { "eraCode": "E3", "sceneCode": "S4", "confidence": 0.8, "promptOverride": null,
+      "visualSignature": "数码闪光灯压脸，白平衡偏绿，地面与家具反光" },
+    { "eraCode": "E4", "sceneCode": "S4", "confidence": 0.9,
+      "promptOverride": "LED 吸顶灯照明，白平衡基本准确，室内通透，现代家电自然入镜",
+      "visualSignature": "手机拍摄，LED 吸顶灯，白平衡基本准确，室内通透，现代家电自然入镜" },
+
+    { "eraCode": "E1", "sceneCode": "S5", "confidence": 0.85, "promptOverride": null,
+      "visualSignature": "黑白，标语墙与大门，日光逆光，人脸偏暗" },
+    { "eraCode": "E2", "sceneCode": "S5", "confidence": 0.9, "promptOverride": null,
+      "visualSignature": "彩色胶卷，单位门头红字，日光平直，色彩偏红" },
+    { "eraCode": "E3", "sceneCode": "S5", "confidence": 0.6, "promptOverride": null,
+      "visualSignature": "数码，门头褪色，白平衡偏冷，天空过曝" },
+    { "eraCode": "E4", "sceneCode": "S5", "confidence": 0.4,
+      "promptOverride": "门头已翻新或已搬迁，日光平淡，背景可能有现代车辆",
+      "visualSignature": "手机拍摄，门头已翻新或搬迁，日光平淡，背景可能有现代车辆" }
+  ]
+}
