@@ -58,7 +58,8 @@ CREATE TABLE photos (
   user_id         INTEGER NOT NULL REFERENCES users(id),
   kind            TEXT NOT NULL CHECK (kind IN ('original','preprocessed','generated')),
   storage_key     TEXT NOT NULL,
-  mime            TEXT NOT NULL,
+  mime            TEXT NOT NULL CHECK (mime IN ('image/jpeg','image/png','image/webp','image/heic')),
+  -- mime 允许值的唯一声明处是 spec/01-领域模型与数据库.md §3.4（与 spec/03 §3.2 接受的格式一致）
   bytes           INTEGER NOT NULL,
   width           INTEGER,
   height          INTEGER,

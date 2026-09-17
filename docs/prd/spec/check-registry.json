@@ -799,6 +799,26 @@
       ]
     },
     {
+      "id": "ERA-02",
+      "layer": "A",
+      "owner": "modules/M07-生成后复核与内容审核.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T11"
+      ]
+    },
+    {
+      "id": "ERA-01",
+      "layer": "A",
+      "owner": "modules/M07-生成后复核与内容审核.md",
+      "path": "[mock]",
+      "assertedBy": "pnpm test",
+      "tickets": [
+        "T11"
+      ]
+    },
+    {
       "id": "REV-01",
       "layer": "B",
       "owner": "modules/M09-图片反推提示词.md",
