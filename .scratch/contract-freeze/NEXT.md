@@ -5,13 +5,13 @@
 
 ## 现在在哪
 
-- **契约单点化系列**（`.scratch/contract-freeze/`，spec 为 `spec.md`）：**01–05 已交付**，Status 均为 `ready-for-human`，工作树干净、全部已提交（最新 `76e794e`）。
-- **下一张：`06-外呼与清单同步.md`**（Status `ready-for-agent`），之后 07 依赖边与所有权、08 负路径与情绪安全、09 历史与结果页口径、10 页面形态与文案清单、11 合规与差异登记。
+- **契约单点化系列**（`.scratch/contract-freeze/`，spec 为 `spec.md`）：**01–06 已交付**，Status 均为 `ready-for-human`，工作树干净、全部已提交。
+- **下一张：`07-依赖边与所有权.md`**（Status `ready-for-agent`），之后 08 负路径与情绪安全、09 历史与结果页口径、10 页面形态与文案清单、11 合规与差异登记。
 - **产品侧**（`docs/prd/tickets/`）：只做了 T01（脚手架 + 四个横切层，提交 `606ed08`/`21e2915`）；**下一张是 T02 数据层**（迁移、schema、种子、11 个 repository、`migrate`/`seed`/`db:reset` 脚本）。
 
 ## 工具现状（改动它们要同步 `docs/prd/spec/08-本地开发指南.md` §3.3 与脚本头部注释）
 
-- `docs/prd/spec/check-registry.json`：87 条检查项（B 65 / A 22）。
+- `docs/prd/spec/check-registry.json`：88 条检查项（B 66 / A 22）。
 - `scripts/check-docs.mjs`：13 条静态断言；`--root` 指夹具树、`--write-index` 按工单表头重写 `tickets/README.md` 的检查项列。
 - `scripts/check-docs.test.mjs`：40 个夹具用例（新增断言必须配用例）。
 - 产品骨架：Next 15 + TS strict + vitest（17 个用例）+ eslint/tsconfig/`package.json`。
