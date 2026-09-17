@@ -168,6 +168,11 @@ test('注册表 A/B 层级与权威总表不一致被拦下', () => {
   expectFinding(run(prd), { assertion: 'single-owner', needles: ['DB-01', 'layer'] });
 });
 
+test('权威总表里 ID 重复（一号两义）被拦下', () => {
+  const prd = tree({ 'spec/07-验收标准.md': spec07('', `${AUTH_ROW}\n${AUTH_ROW}`) });
+  expectFinding(run(prd), { assertion: 'ids-unique', needles: ['DB-01', '07-验收标准.md'] });
+});
+
 test('注册表里有权威总表没有的 ID 被拦下', () => {
   const prd = tree({
     'spec/check-registry.json': JSON.stringify(
@@ -215,6 +220,21 @@ test('「新建/修改」未二选一被拦下', () => {
 test('指向不存在的文件被拦下', () => {
   const prd = tree({ 'tickets/T01-夹具工单.md': ticket({ extra: '- 见 `pages/P09-不存在.md`。' }) });
   expectFinding(run(prd), { assertion: 'refs-resolve', needles: ['pages/P09-不存在.md'] });
+});
+
+test('已声明「新建」但尚未落地的文档不算破损引用', () => {
+  const prd = tree({
+    'tickets/T01-夹具工单.md': ticket({
+      rows: [
+        '| `src/a.ts` | 新建 | 模块 a | `spec/07-验收标准.md` |',
+        '| `docs/prd/pages/P09-新页.md` | 新建 | 尚未落地的页面文档 | `spec/07-验收标准.md` |',
+      ],
+      extra: '- 该页文档见 `docs/prd/pages/P09-新页.md`。',
+    }),
+  });
+  const res = run(prd);
+  assert.equal(res.code, 0, res.out);
+  assert.doesNotMatch(res.out, /refs-resolve/);
 });
 
 test('指向不存在的章节被拦下（目标节有编号子节时）', () => {

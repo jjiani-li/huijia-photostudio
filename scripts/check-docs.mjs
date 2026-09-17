@@ -60,7 +60,9 @@ const ROOT_FILES = new Set([
   'README.md',
   'AGENTS.md',
 ]);
-const ID_SHAPE = /\b[A-Z][A-Z0-9]{1,3}-\d{2}\b/g;
+const ID_BODY = '[A-Z][A-Z0-9]{1,3}-\\d{2}';
+const ID_SHAPE = new RegExp(`\\b${ID_BODY}\\b`, 'g');
+const ID_TOKEN = new RegExp(`^${ID_BODY}$`);
 const BACKTICKED = (s) => [...s.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]);
 const DOC_REF =
   /(?:docs\/prd\/)?(?:spec|modules|pages|tickets)\/[A-Za-z0-9\u4e00-\u9fa5_.-]+\.(?:md|sql|json)|(?<![\w/])README\.md/g;
@@ -88,17 +90,17 @@ if (!fs.existsSync(PRD)) {
 }
 const allFiles = walk(PRD);
 const mdFiles = allFiles.filter((f) => f.endsWith('.md'));
-const texts = new Map(mdFiles.map((f) => [f, fs.readFileSync(f, 'utf8')]));
+const registryPath = path.join(PRD, 'spec/check-registry.json');
+const texts = new Map([...mdFiles, registryPath].map((f) => [f, fs.readFileSync(f, 'utf8')]));
 const linesOf = (f) => texts.get(f).split('\n');
 
-const registryPath = path.join(PRD, 'spec/check-registry.json');
 if (!fs.existsSync(registryPath)) {
   console.error(`check:docs: 找不到注册表：${rel(registryPath)}`);
   process.exit(2);
 }
 let registry;
 try {
-  registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+  registry = JSON.parse(texts.get(registryPath));
 } catch (err) {
   console.error(`check:docs: 注册表不是合法 JSON：${rel(registryPath)} — ${err.message}`);
   process.exit(2);
@@ -159,6 +161,9 @@ if (fs.existsSync(authorityPath)) {
     if (cells.length !== 5) return;
     const idm = cells[0].match(/^`([A-Z][A-Z0-9]{1,3}-\d{2})`$/);
     if (!idm) return;
+    if (authority.has(idm[1])) {
+      fail('ids-unique', `${rel(authorityPath)}:${i + 1}`, `检查项总表里 ID 重复：${idm[1]}（一号两义）`);
+    }
     authority.set(idm[1], {
       layer: section === '2.9' ? 'A' : 'B',
       owner: cells[3].replace(/`/g, ''),
@@ -281,7 +286,7 @@ for (const f of mdFiles) {
         fail('declared-ids-exist', `${rel(f)}:${i + 1}`, `引用了已退役的 ID：${token}（${gone.reason}）`);
         continue;
       }
-      if (!/^[A-Z][A-Z0-9]{1,3}-\d{2}$/.test(token)) continue;
+      if (!ID_TOKEN.test(token)) continue;
       if (ids.has(token)) continue;
       fail('declared-ids-exist', `${rel(f)}:${i + 1}`, `引用了未注册的 ID：${token}`);
     }
@@ -335,6 +340,8 @@ for (const [p, list] of news) {
     );
   }
 }
+// 已声明「新建」的产物在落地前不存在是正常的，不算破损引用（断言 6 用）
+const declaredNew = new Set(news.keys());
 
 // ------------------------------------------------- 断言 6：被引用的文件/章节/归属文档
 const resolveDocRef = (from, ref) => {
@@ -353,7 +360,9 @@ for (const f of mdFiles) {
       const ref = m[0];
       if (seen.has(ref)) continue;
       seen.add(ref);
-      if (!resolveDocRef(f, ref)) fail('refs-resolve', where, `指向不存在的文件：${ref}`);
+      if (resolveDocRef(f, ref)) continue;
+      if (declaredNew.has(ref)) continue; // 已被某条工单声明「新建」，落地前不存在是正常的
+      fail('refs-resolve', where, `指向不存在的文件：${ref}（也没有工单把它声明为「新建」）`);
     }
     for (const m of line.matchAll(SECTION_REF)) {
       const [, ref, sec] = m;
@@ -439,7 +448,7 @@ const derived = {
   B: checks.filter((c) => c.layer === 'B').length,
   A: checks.filter((c) => c.layer === 'A').length,
   total: checks.length,
-  files: allFiles.filter((f) => /\.(md|json|sql)$/.test(f)).length,
+  files: allFiles.length,
 };
 const COUNT_PATTERNS = [
   [/B 层（(\d+) 项）/, 'B'],
@@ -455,8 +464,7 @@ const COUNT_PATTERNS = [
   [/共 \*?\*?(\d+) 个文件/, 'files'],
 ];
 for (const f of [...mdFiles, registryPath]) {
-  const lines = fs.readFileSync(f, 'utf8').split('\n');
-  lines.forEach((line, i) => {
+  linesOf(f).forEach((line, i) => {
     for (const [re, key] of COUNT_PATTERNS) {
       for (const m of line.matchAll(new RegExp(re.source, 'g'))) {
         if (Number(m[1]) === derived[key]) continue;
