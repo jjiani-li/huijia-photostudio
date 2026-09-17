@@ -632,6 +632,23 @@ test('前端错误码形态清单覆盖全部错误码则通过', () => {
   assert.equal(res.code, 0, res.out);
 });
 
+test('复述错误码的用户可见文案被拦下', () => {
+  const prd = tree({
+    'spec/03-接口契约.md': spec03('UNAUTHENTICATED'),
+    'pages/P99-夹具页.md': pageDoc('未登录时展示 `夹具文案`。'),
+  });
+  expectFinding(run(prd), { assertion: 'error-copy-single-source', needles: ['P99-夹具页.md', '夹具文案'] });
+});
+
+test('只写「取服务端 error.message」并给指针则通过', () => {
+  const prd = tree({
+    'spec/03-接口契约.md': spec03('UNAUTHENTICATED'),
+    'pages/P99-夹具页.md': pageDoc('未登录时取服务端 `error.message`（`spec/03-接口契约.md` §5）。'),
+  });
+  const res = run(prd);
+  assert.equal(res.code, 0, res.out);
+});
+
 // --------------------------------------------------------------- 独立运行
 test('不需要环境变量、不依赖产品进程', () => {
   const prd = tree();

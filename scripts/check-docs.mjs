@@ -2,7 +2,7 @@
 /**
  * check:docs —— 文档闸门。
  *
- * 断言 `docs/prd/` 文档树与 `spec/check-registry.json` 自洽，共 16 条：
+ * 断言 `docs/prd/` 文档树与 `spec/check-registry.json` 自洽，共 17 条：
  *   1. ids-unique            检查项 ID 全局唯一
  *   2. single-owner          每个 ID 恰有一个归属文档与一条认领工单
  *   3. no-orphan             每个 ID 至少被一条工单表头认领
@@ -21,6 +21,7 @@
  *  14. page-min-sections     每份页面文档含最小必需节（目标、范围与依赖 / 接口消费 / 状态与错误 / 验收与测试要点）
  *  15. module-min-sections   每份模块文档含最小必需节（七节）+ `> 一句话职责：` 一行，且 `### N.M` 子节编号从 .1 起连续
  *  16. error-list-coverage   前端「code → 形态」清单覆盖 `spec/03` §5 的全部错误码
+ *  17. error-copy-single-source 错误码的用户可见文案只在 `spec/03` §5 声明（别处不得抄原句）
  * 只读文件系统，不依赖环境变量、凭证或产品进程。
  * 用法：node scripts/check-docs.mjs [--root <docs/prd>] [--write-index]
  *   --root         指定文档树根（默认 <仓库根>/docs/prd），测试夹具用
@@ -512,12 +513,16 @@ for (const f of [...mdFiles, registryPath]) {
 // 表格行里的正常叙述（如验收项「→ `409 ANCHOR_NOT_CONFIRMED`」）不算复述。
 const errorCodesPath = path.join(PRD, 'spec/03-接口契约.md');
 const codeStatus = new Map();
+const codeMessage = new Map(); // code → 用户可见文案（仅当该表有第 4 列文案）
 if (fs.existsSync(errorCodesPath)) {
   for (const line of linesOf(errorCodesPath)) {
     const cells = tableCells(line);
     if (cells.length < 2) continue;
     const code = cells[0].replace(/`/g, '');
-    if (/^[A-Z][A-Z0-9_]{3,}$/.test(code) && /^\d{3}$/.test(cells[1])) codeStatus.set(code, Number(cells[1]));
+    if (!/^[A-Z][A-Z0-9_]{3,}$/.test(code) || !/^\d{3}$/.test(cells[1])) continue;
+    codeStatus.set(code, Number(cells[1]));
+    const msg = (cells[3] ?? '').trim();
+    if (msg) codeMessage.set(code, msg);
   }
 }
 if (fs.existsSync(errorCodesPath) && codeStatus.size === 0) {
@@ -690,8 +695,9 @@ for (const f of mdFiles) {
 }
 
 // ------------------------------------------------- 断言 14/15：文档最小必需节
-// 模板（页面文档四节 + 模块文档九节 + 一句话职责 + 子节编号连续）定义在
+// 模板（页面文档四节 / 模块文档七节 + 一句话职责 + 子节编号连续）定义在
 // `spec/09-施工纪律.md` §6.1。章节标题以列出的字面开头即可（允许带限定后缀），其余节可自由增补。
+// 只断言各节**存在**，不断言先后顺序（既有页面文档的节序本就各不相同）。
 const PAGE_REQUIRED = ['目标、范围与依赖', '接口消费', '状态与错误', '验收与测试要点'];
 const MODULE_REQUIRED = [
   '职责与边界',
@@ -706,7 +712,7 @@ const docHeadingText = (line) => {
   const m = line.match(/^##\s+(?:\d+(?:\.\d+)*[.、]?\s*)?(.*)$/);
   return m ? m[1].trim() : null;
 };
-const checkMinSections = (dirName, required, assertion) => {
+const checkMinSections = (dirName, required, assertion, { oneLiner = false, contiguousSubs = false } = {}) => {
   const dir = path.join(PRD, dirName);
   if (!fs.existsSync(dir)) return;
   for (const name of fs.readdirSync(dir).filter((n) => n.endsWith('.md')).sort()) {
@@ -718,10 +724,10 @@ const checkMinSections = (dirName, required, assertion) => {
         fail(assertion, rel(full), `缺少最小必需节「${want}」（标题需以该字面开头，见 spec/09-施工纪律.md §6.1）`);
       }
     }
-    if (assertion !== 'module-min-sections') continue;
-    if (!lines.some((l) => /^>\s*一句话职责：/.test(l))) {
+    if (oneLiner && !lines.some((l) => /^>\s*一句话职责：/.test(l))) {
       fail(assertion, rel(full), '缺少 `> 一句话职责：…` 一行（模板见 spec/09-施工纪律.md §6.1）');
     }
+    if (!contiguousSubs) continue;
     const subs = new Map(); // 顶层节号 → Map(子节号 → 首行行号)
     lines.forEach((l, i) => {
       const s = l.match(/^###\s+(\d+)\.(\d+)/);
@@ -743,7 +749,7 @@ const checkMinSections = (dirName, required, assertion) => {
   }
 };
 checkMinSections('pages', PAGE_REQUIRED, 'page-min-sections');
-checkMinSections('modules', MODULE_REQUIRED, 'module-min-sections');
+checkMinSections('modules', MODULE_REQUIRED, 'module-min-sections', { oneLiner: true, contiguousSubs: true });
 
 // ------------------------------------------------- 断言 16：错误码形态清单覆盖全部已定义错误码
 // `spec/03-接口契约.md` §5 是错误码的唯一事实源；前端「code → 呈现形态」的清单在
@@ -779,6 +785,24 @@ if (fs.existsSync(p00Path) && codeStatus.size > 0) {
   }
 }
 
+// ------------------------------------------------- 断言 17：错误码的用户可见文案只在 spec/03 §5 声明
+// `spec/03-接口契约.md` §5 的「用户可见文案」列是文案的唯一事实源。别处只写「取服务端
+// `error.message`」并给指针，不得把原句再抄一遍（页面逐字文案表、模块代码示例都算复述）。
+for (const f of mdFiles) {
+  if (path.normalize(f) === path.normalize(errorCodesPath)) continue;
+  linesOf(f).forEach((line, i) => {
+    for (const [code, msg] of codeMessage) {
+      if (msg && line.includes(msg)) {
+        fail(
+          'error-copy-single-source',
+          `${rel(f)}:${i + 1}`,
+          `复述了 ${code} 的用户可见文案「${msg}」：文案唯一事实源是 spec/03-接口契约.md §5，这里应写「取服务端 error.message」`,
+        );
+      }
+    }
+  });
+}
+
 // ---------------------------------------------------------------- 输出
 if (findings.length) {
   for (const f of findings) console.error(`[${f.assertion}] ${f.where} — ${f.message}`);
@@ -788,5 +812,5 @@ if (findings.length) {
   process.exit(1);
 }
 console.log(
-  `check:docs OK: 16 条断言全绿（注册表 ${derived.total} 项：B ${derived.B} / A ${derived.A}；文档 ${derived.files} 份）`,
+  `check:docs OK: 17 条断言全绿（注册表 ${derived.total} 项：B ${derived.B} / A ${derived.A}；文档 ${derived.files} 份）`,
 );

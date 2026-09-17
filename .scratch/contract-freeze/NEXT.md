@@ -12,8 +12,8 @@
 ## 工具现状（改动它们要同步 `docs/prd/spec/08-本地开发指南.md` §3.3 与脚本头部注释）
 
 - `docs/prd/spec/check-registry.json`：89 条检查项（B 67 / A 22）。
-- `scripts/check-docs.mjs`：16 条静态断言（新增 `page-min-sections` / `module-min-sections` / `error-list-coverage`）；`--root` 指夹具树、`--write-index` 按工单表头重写 `tickets/README.md` 的检查项列。
-- `scripts/check-docs.test.mjs`：48 个夹具用例（新增断言必须配用例）。
+- `scripts/check-docs.mjs`：17 条静态断言（新增 `page-min-sections` / `module-min-sections` / `error-list-coverage` / `error-copy-single-source`）；`--root` 指夹具树、`--write-index` 按工单表头重写 `tickets/README.md` 的检查项列。
+- `scripts/check-docs.test.mjs`：50 个夹具用例（新增断言必须配用例）。
 - 产品骨架：Next 15 + TS strict + vitest（17 个用例）+ eslint/tsconfig/`package.json`。
 
 ## 一条 ticket 的做法（01–10 都按这个走）
