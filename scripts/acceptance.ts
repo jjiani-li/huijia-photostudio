@@ -46,7 +46,6 @@ import {
 import { ERROR_MESSAGE } from '../src/shared/error-message';
 import {
   assertAnchorGeneratable,
-  buildGenerationDraft,
   createGeneration,
   MIN_SIZE_PIXELS,
   retryGeneration,
@@ -2186,9 +2185,15 @@ const purgePhotos = (ids: number[]): void => {
   }
 };
 
+/** 本次运行内新建的行 id：`newIds(table, 跑之前的 id 集合)`（`E2E-10` / `API-02` 的残留断言与清理共用）。 */
+const newIds = (table: 'photos' | 'identity_anchors' | 'generations', before: Set<number>): number[] =>
+  (getDb().prepare(`SELECT id FROM ${table}`).all() as { id: number }[])
+    .map((row) => row.id)
+    .filter((id) => !before.has(id));
+
 /**
- * `E2E-01` / `E2E-10` 共用的链路驱动（`spec/07-验收标准.md` §2.4）：真实样例 → 上传 → 预处理 → 建锚点
- * → 提取 → 确认 → 生成 → 复核 → 历史 → 下载，**全程只走端点与 handler，不手工改库**。
+ * `E2E-01` / `E2E-02` / `E2E-10` 共用的链路驱动（`spec/07-验收标准.md` §2.4）：真实样例 → 上传 → 预处理
+ * → 建锚点 → 提取 → 确认 → 生成 → 复核 → 历史 → 下载，**全程只走端点与 handler，不手工改库**。
  * 返回步骤串 / 问题串与本次新建的行 id（供 `E2E-10` 的残留断言），清理登记进 `cleanups`（§3，幂等）。
  */
 interface SampleChain {
@@ -2201,15 +2206,10 @@ interface SampleChain {
   newGenerationIds: number[];
 }
 
-const driveSampleChain = async (): Promise<SampleChain> => {
+const driveSampleChain = async (keepRowsUntilEnd = false): Promise<SampleChain> => {
   // 生成链路的额度预扣会撞满 DEV_USER 的默认上限（T09/T10 的用例不回收），先抬高上限并快照回滚。
   raiseQuotaForGenerationChecks();
   snapshotUsage();
-
-  const newIds = (table: string, before: Set<number>): number[] =>
-    (getDb().prepare(`SELECT id FROM ${table}`).all() as { id: number }[])
-      .map((row) => row.id)
-      .filter((id) => !before.has(id));
 
   const photosBefore = new Set(
     (getDb().prepare('SELECT id FROM photos').all() as { id: number }[]).map((row) => row.id),
@@ -2406,7 +2406,9 @@ const driveSampleChain = async (): Promise<SampleChain> => {
 
       return outcome();
     } finally {
-      /* 统一清理由 `cleanups` 在 `main()` 结束时执行（helper 已登记，幂等） */
+      // 默认立即回收（幂等，`cleanups` 里那份是兜底），helper 中途抛错也不留行与盘上文件；
+      // `keepRowsUntilEnd` 时留到 `main()` 结束前（`E2E-10` 要在链路结束后读新增行的终态）。
+      if (!keepRowsUntilEnd) cleanup();
     }
   };
 
@@ -2429,16 +2431,22 @@ checks.push({
 // ── `tickets/T20` 最终验收收口：B 层最后 9 项（`docs/prd/spec/07-验收标准.md` §2）──
 // `API-01` / `CMP-02` 是静态扫描；其余进程内直调端点 / handler，清理统一登记进 `cleanups`（§3）。
 
-/** `spec/03-接口契约.md` §3 的端点清单：静态解析文档，`API-01` 据此校验路由文件与方法导出。 */
+/**
+ * `spec/03-接口契约.md` §3 的端点清单：静态解析文档，`API-01` 据此校验路由文件与方法导出。
+ * 文档里的列表端点写作 ``**`GET /api/photos?cursor=<opaque>&limit=20`**``——按查询串前的路径去重，
+ * 否则 `GET /api/history` / `GET /api/photos` 会被 `?` 漏掉（§2.3 要求「无缺失」）。
+ */
 const specEndpoints = (): { method: string; apiPath: string }[] => {
   const text = fs.readFileSync('docs/prd/spec/03-接口契约.md', 'utf8');
   const section = text.slice(text.indexOf('## 3. 端点详表'), text.indexOf('## 4. TypeScript 形状'));
   const found = new Map<string, { method: string; apiPath: string }>();
-  const re = /\*\*`(GET|POST|DELETE|PATCH|PUT) (\/api\/[^`?\s]+)`\*\*/g;
+  const re = /\*\*`(GET|POST|DELETE|PATCH|PUT) (\/api\/[^`\s]+)`\*\*/g;
   for (const m of section.matchAll(re)) {
     const method = m[1];
-    const apiPath = m[2];
-    if (method !== undefined && apiPath !== undefined) found.set(`${method} ${apiPath}`, { method, apiPath });
+    const rawPath = m[2];
+    if (method === undefined || rawPath === undefined) continue;
+    const apiPath = rawPath.split('?')[0] ?? rawPath;
+    found.set(`${method} ${apiPath}`, { method, apiPath });
   }
   return [...found.values()].sort((a, b) =>
     `${a.method} ${a.apiPath}`.localeCompare(`${b.method} ${b.apiPath}`),
@@ -2539,18 +2547,12 @@ checks.push(
         (getDb().prepare('SELECT id FROM identity_anchors').all() as { id: number }[]).map((row) => row.id),
       );
       cleanups.push(() => {
-        for (const id of (getDb().prepare('SELECT id FROM identity_anchors').all() as { id: number }[])
-          .map((row) => row.id)
-          .filter((id) => !anchorsBefore.has(id))) {
+        for (const id of newIds('identity_anchors', anchorsBefore)) {
           getDb().prepare('DELETE FROM consents WHERE anchor_id = ?').run(id);
           getDb().prepare('DELETE FROM audit_logs WHERE target = ?').run(`anchor:${id}`);
           hardDeleteAnchor(id, DEV_USER);
         }
-        purgePhotos(
-          (getDb().prepare('SELECT id FROM photos').all() as { id: number }[])
-            .map((row) => row.id)
-            .filter((id) => !photosBefore.has(id)),
-        );
+        purgePhotos(newIds('photos', photosBefore));
       });
 
       // ① GET /api/health（免登录）
@@ -2941,10 +2943,10 @@ checks.push(
       }),
   },
   {
-    // `CMP-02`（`spec/06-合规与风控.md` §6.2 第 11 行 / §9.1、`spec/07-验收标准.md` §2.8）：静态扫描
+    // `CMP-02`（`spec/06-合规与风控.md` §2 义务清单第 11 行 / §9.1、`spec/07-验收标准.md` §2.8）：静态扫描
     // `app/` / `components/` / `src/` 的源码文本（去注释后是「字符串字面量与 JSX 文本」的超集）。
-    // 适用面是**用户可见文案**，故跳过测试文件（它们按约定枚举禁用词当负例）与 prompt 正文资产
-    // （`src/server/prompt/*` 的「不是修复照片」是给模型看的指令，不是用户可见文案）。
+    // 适用面是**用户可见文案**（§2 第 11 行的「全部用户可见文案」），故跳过测试文件（它们按约定枚举禁用词
+    // 当负例）与 prompt 正文资产（`src/server/prompt/*` 的「不是修复照片」是给模型看的指令，不是用户可见文案）。
     id: 'CMP-02',
     run: () => {
       const banned = [
@@ -2963,8 +2965,10 @@ checks.push(
       ];
       // 单词边界：`data` / `start` 里的 `ta` 不算，只有作为独立词的 `ta` 命中（`pages/P00` §9.3 的 `让ta回来`）。
       const standaloneTa = /(?<![A-Za-z])ta(?![A-Za-z])/;
+      // 只剥「行首或空白后的 `//`」与块注释：不误伤字符串里的 `//`（如 `https://`），
+      // 也避免把 `'a//修复'` 这类字面量里的命中悄悄抹掉。
       const stripComments = (text: string): string =>
-        text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+        text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/[^\n]*/gm, '$1');
       const offenders: string[] = [];
       const scan = (dir: string): void => {
         if (!fs.existsSync(dir)) return;
@@ -3007,8 +3011,10 @@ checks.push(
     },
   },
   {
-    // `E2E-03`（`spec/07-验收标准.md` §2.4、`modules/M06` §5.1）：`generations.prompt` 与
-    // `buildGenerationDraft(anchorText, era, scene, profile)` 的输出**逐字符相等**（不另算、不改写）。
+    // `E2E-03`（`spec/07-验收标准.md` §2.4、`modules/M05-年代场景配置与Prompt拼装.md` §8 用例③）：
+    // `generations.prompt` 与 `buildPrompt(anchorText, era, scene, profile)` 的输出**逐字符相等**——
+    // 用 `spec/05-Prompt工程.md` 的那个入口函数重算（不是 `createGeneration` 内部用过的包装），
+    // 等价于断言落库值没有被二次加工。
     id: 'E2E-03',
     run: () =>
       withGeneration(2, async ({ id }) => {
@@ -3022,9 +3028,9 @@ checks.push(
         const scene = getScene(row.scene_id);
         const anchorText = anchor?.anchor_text ?? '';
         if (era === null || scene === null || anchorText === '') {
-          return { ok: false, expected: '与 buildGenerationDraft 输出逐字符相等', actual: '取不到 era / scene / anchor_text' };
+          return { ok: false, expected: '与 buildPrompt 输出逐字符相等', actual: '取不到 era / scene / anchor_text' };
         }
-        const expected = buildGenerationDraft({
+        const expected = buildPrompt({
           anchorText,
           era,
           scene,
@@ -3032,7 +3038,7 @@ checks.push(
         }).prompt;
         return {
           ok: row.prompt === expected,
-          expected: 'generations.prompt 与 buildGenerationDraft 输出逐字符相等',
+          expected: 'generations.prompt 与 buildPrompt 输出逐字符相等',
           actual:
             row.prompt === expected
               ? `相等（${row.prompt.length} 字符）`
@@ -3041,11 +3047,13 @@ checks.push(
       }),
   },
   {
-    // `E2E-10`（`spec/07-验收标准.md` §2.4）：整条链路闭环——生成全 `succeeded`、锚点 `succeeded`、
-    // 结果张数与 `ordinal` 连续、「无手工改库」的机器化代理是 confirm / generation.create 审计齐全。
+    // `E2E-10`（`spec/07-验收标准.md` §2.4）：整条「上传 → 预处理 → 锚点 → 确认 → 生成 → **复核** → 历史」
+    // 在 mock 下闭环——生成全 `succeeded`、锚点 `succeeded`、结果张数与 `ordinal` 连续、每张都带复核标注、
+    // 审核留痕齐全；「无手工改库」的机器化代理是 confirm / generation.create 审计齐全。
     id: 'E2E-10',
     run: async () => {
-      const chain = await driveSampleChain();
+      // 链路结束后还要读新增行的终态，故把回收留到 `main()` 结束前（`cleanups`）。
+      const chain = await driveSampleChain(true);
       if (chain.problems.length > 0 || chain.anchorId === null || chain.generationId === null) {
         return {
           ok: false,
@@ -3060,6 +3068,20 @@ checks.push(
       );
       const generationStatuses = chain.newGenerationIds.map((id) => generationRow(id).status);
       const results = resultRows(chain.generationId);
+      // 复核（软标注，`modules/M07` §5.3）：每张结果都带 `era_check_json.verdict`，并留下 `stage='result'` 审核行。
+      const reviewRows = getDb()
+        .prepare('SELECT era_check_json FROM generation_results WHERE generation_id = ? ORDER BY ordinal')
+        .all(chain.generationId) as { era_check_json: string | null }[];
+      const eraChecked = reviewRows.filter((row) => {
+        if (row.era_check_json === null) return false;
+        try {
+          const parsed = JSON.parse(row.era_check_json) as { verdict?: string };
+          return ['pass', 'review', 'reject'].includes(parsed.verdict ?? '');
+        } catch {
+          return false;
+        }
+      }).length;
+      const resultReviews = contentReviewRows(chain.generationId, 'result').length;
       const confirmAudit = (
         getDb()
           .prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'anchor.confirm' AND target = ?")
@@ -3075,13 +3097,16 @@ checks.push(
         anchorStatuses.every((status) => status === 'succeeded') &&
         results.length === 2 &&
         results.every((row, index) => row.ordinal === index) &&
+        eraChecked === reviewRows.length &&
+        reviewRows.length === results.length &&
+        resultReviews >= 1 &&
         confirmAudit >= 1 &&
         createAudit >= 1;
       return {
         ok,
         expected:
-          '全链路闭环：生成全部 succeeded、锚点 succeeded、结果 2 张且 ordinal 连续、confirm / generation.create 审计齐全',
-        actual: `生成 ${generationStatuses.join(',') || '(无)'}、锚点 ${anchorStatuses.join(',') || '(无)'}、结果 ${results.length} 张、confirm 审计 ${confirmAudit}、create 审计 ${createAudit}`,
+          '全链路闭环：生成全部 succeeded、锚点 succeeded、结果 2 张且 ordinal 连续、每张带复核标注、有 stage=result 审核行、confirm / generation.create 审计齐全',
+        actual: `生成 ${generationStatuses.join(',') || '(无)'}、锚点 ${anchorStatuses.join(',') || '(无)'}、结果 ${results.length} 张、复核标注 ${eraChecked}/${reviewRows.length}、result 审核 ${resultReviews}、confirm 审计 ${confirmAudit}、create 审计 ${createAudit}`,
       };
     },
   },

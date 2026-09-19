@@ -49,6 +49,7 @@ docs/prd/spec/09-施工纪律.md，然后按我指定的方向开工（不要自
 - **`API-02` 的实现形态**：共享 schema 只覆盖 `spec/03-接口契约.md` §4 列出的形状；`{ ok: true }` / `{ ok, cascaded }` / `POST /api/auth/code` 的 `{ sent, expiresInSec, devCode? }` / 二进制读图按文档顶层键集与响应头断言（不新增 schema）。口径记在 `tickets/T20` 的 `## Comments`。
 - **`E2E-01` / `E2E-02` / `E2E-10` 共用 `driveSampleChain()`**：跑一遍 `pnpm check:acceptance` 会驱动 3 次真实链路（每次约 10s）。
 - `pnpm smoke` 需要 `pnpm worker` 在另一终端存活（探活失败即报错提示）；`pnpm check:acceptance` 不需要。
+- **`pnpm check:acceptance` 与 `pnpm worker` 不能同时存活**：`scripts/acceptance.ts` 是进程内直调端点与 handler 的执行器，`SEC-05` 依赖自己刚建的 `queued` 生成行保持非终态；worker 一存活就会把它领走并快速落终态（夹具锚点用不落盘的 `sharedPreprocessedPhoto()`），于是 `SEC-05` 报 `NO_THROW`。实测无 worker 时 **67 passed / 0 failed**，worker 存活时 66 passed / 1 failed（仅 `SEC-05`）。跑法：`check:acceptance` 在没起 worker 的终端跑，`smoke` 在 worker 存活时跑。口径记在 `tickets/T20` 的 `## Comments`。
 - `docs/提示词.md`、`ERR-01`/`ERR-05`（随 T10）、`E2E-01`（随 T15）、`E2E-02`（随 T20）、`E2E-03`（随 T20）、`E2E-10`（随 T20）均已落地；`CMP-06` 的断言落点在 `scripts/acceptance.ts`（静态扫描）。
 - `API-09`/`RN-01`–`RN-04` 随 T19 补齐；`ID_VERIFY_PROVIDER=real` 抛 `INTERNAL`（生产留空位），实名证件号规则取 GB 11643 的 18 位 + ISO 7064 MOD 11-2 校验位。
 - `pnpm build` 全绿（27 路由），`src/server/ark/fixtures.ts` 用 `path.dirname(fileURLToPath(import.meta.url))` 的 webpack 安全写法。

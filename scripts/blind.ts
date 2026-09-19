@@ -20,6 +20,7 @@ import path from 'node:path';
 import { randomInt } from 'node:crypto';
 import { getDb } from '../src/server/db/connection';
 import { getStorage } from '../src/server/storage';
+import { dayKey } from '../src/server/domain/time';
 
 /** 每个年代层最多取多少张生成图（`docs/prd/spec/07-验收标准.md` §4）。 */
 const MAX_PER_ERA = 10;
@@ -72,13 +73,10 @@ interface BlindContext {
   notes: string[];
 }
 
-const dayKey = (date: Date): string =>
-  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-
-/** 解析 `--out <目录>`；缺省 `./blind-runs/<YYYY-MM-DD>`。 */
+/** 解析 `--out <目录>`；缺省 `./blind-runs/<YYYY-MM-DD>`。日期串取 `src/server/domain/time.ts` 的唯一入口。 */
 const parseOutDir = (argv: string[]): string => {
   const index = argv.indexOf('--out');
-  if (index === -1) return path.join('blind-runs', dayKey(new Date()));
+  if (index === -1) return path.join('blind-runs', dayKey());
   const value = argv[index + 1];
   if (value === undefined || value.startsWith('--')) {
     throw new Error('--out 需要一个目录参数，例如 --out ./blind-runs/2026-09-17');
