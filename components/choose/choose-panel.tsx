@@ -38,8 +38,13 @@ interface MeResponse {
 
 const loadMe = (): Promise<MeResponse> => apiRequest<MeResponse>('/api/me');
 
+/**
+ * `GET /api/anchors/:id` 的成功响应是 `{ anchor }` 具名信封（`docs/prd/spec/03-接口契约.md` §1.4：
+ * 成功响应不用 envelope，业务对象包在具名键下），**必须拆一层再交给守卫**——否则
+ * `shouldRedirectToConfirm` 读到 `undefined !== true`，会把已确认的锚点也弹回确认页。
+ */
 const loadAnchor = (anchorId: number): Promise<Anchor> =>
-  apiRequest<Anchor>(`/api/anchors/${anchorId}`);
+  apiRequest<{ anchor: Anchor }>(`/api/anchors/${anchorId}`).then((res) => res.anchor);
 
 export interface ChoosePanelProps {
   anchorId: number;
