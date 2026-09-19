@@ -52,6 +52,10 @@ export interface ArkImageResult {
 export interface ArkProvider {
   /** F1 读图：一次调用返回 `anchorText` + 12 键 `features`。 */
   extractAnchor(input: AnchorExtractInput): Promise<AnchorExtractResult>;
-  /** F2 生图：返回 `count` 张候选（每张需立即转存，签名链会过期）。 */
-  generateImage(request: ArkImageRequest): Promise<ArkImageResult>;
+  /**
+   * F2 生图：返回 `count` 张候选（每张需立即转存，签名链会过期）。
+   * `signal` 由 worker 的 `JOB_TIMEOUT_SECONDS` 竞速注入，用于中止仍在飞的上游调用
+   * （`spec/04-技术基线与目录结构.md` §4.6；中止按超时映射为 `PROVIDER_TIMEOUT`）。
+   */
+  generateImage(request: ArkImageRequest, signal?: AbortSignal): Promise<ArkImageResult>;
 }

@@ -299,3 +299,45 @@ export const listResultsByGeneration = (generationId: number): GenerationResultR
       )
       .all(generationId) as GenerationResultRow[]
   ).map(toResult);
+
+export interface InsertResultInput {
+  generationId: number;
+  photoId: number;
+  ordinal: number;
+  seed: number | null;
+  createdAt: Iso;
+}
+
+/**
+ * 插一行结果（`modules/M06` §5.9 ⑤）：`ordinal` 由调用方按产出顺序给 0..n-1 连续值。
+ * `era_check_json` / `age_delta` 留 `NULL`，由 `tickets/T11` 的复核回填；`realism_score` 本期恒 `NULL`。
+ */
+export const insertResult = (input: InsertResultInput): void => {
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `INSERT INTO generation_results (generation_id, photo_id, ordinal, seed, created_at)
+           VALUES (@generationId, @photoId, @ordinal, @seed, @createdAt)`,
+        )
+        .run(input),
+    )();
+};
+
+/**
+ * 自动重试：零产出的瞬时失败 → 回到 `queued` 且 `attempt` 自增（`modules/M06` §5.5、`spec/04` §4.6）。
+ * 与 `anchors.ts` 的 `requeueForRetry` 同一写法（worker 的 `SETTLE_OPS.generations` 用 `updateStatus`
+ * 表达同一状态，两处语义一致）。
+ */
+export const requeueForRetry = (id: number, attempt: number, errorCode: string, errorMessage: string): void => {
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `UPDATE generations SET status = 'queued', attempt = @attempt, error_code = @errorCode,
+                  error_message = @errorMessage, started_at = NULL, finished_at = NULL
+           WHERE id = @id`,
+        )
+        .run({ id, attempt, errorCode, errorMessage }),
+    )();
+};

@@ -62,8 +62,12 @@ export class MockArkProvider implements ArkProvider {
     return { raw: JSON.stringify({ anchor: anchorText, features }), model: fixture.model };
   }
 
-  async generateImage(request: ArkImageRequest): Promise<ArkImageResult> {
+  async generateImage(request: ArkImageRequest, signal?: AbortSignal): Promise<ArkImageResult> {
     await delay(SLEEP_BASE_MS + (hash(request.prompt) % SLEEP_SPAN_MS));
+    // worker 的 `JOB_TIMEOUT_SECONDS` 中止（`spec/04` §4.6）：按超时映射为 `PROVIDER_TIMEOUT`。
+    if (signal?.aborted === true) {
+      throw new ArkUpstreamError({ kind: 'timeout', message: 'job aborted' });
+    }
 
     if (this.failure !== null) throw new ArkUpstreamError(readFailureFixture(this.failure));
     if (request.prompt.includes(MOCK_UNKNOWN_SCENE_MARKER)) {
@@ -72,7 +76,9 @@ export class MockArkProvider implements ArkProvider {
 
     const fixture = readFixture<ImageGenerationFixture>('ark/image-generation.json');
     const images = Array.from({ length: request.count }, (_, ordinal) => {
-      const index = hash(`${request.prompt}|${ordinal}`) % IMAGE_FIXTURE_COUNT;
+      // `(hash(prompt) + ordinal) % 3`：`count ≥ 2` 时前两张必然落在不同的 fixture 上
+      // （`E2E-07` 要求至少 2 张 sha256 不同），同一 prompt 仍确定性回放。
+      const index = (hash(request.prompt) + ordinal) % IMAGE_FIXTURE_COUNT;
       const picked = fixture.data[index] ?? fixture.data[0];
       return {
         url: picked?.url ?? 'fixtures/images/generated-01.png',

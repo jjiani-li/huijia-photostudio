@@ -10,13 +10,21 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import type { NextRequest } from 'next/server';
+import sharp from 'sharp';
 import { getDb } from '../src/server/db/connection';
 import { hardDeleteAnchor, insert as insertAnchor } from '../src/server/db/repositories/anchors';
 import { readEraSceneConfig } from '../src/server/db/repositories/config';
+import { findById as findGenerationById } from '../src/server/db/repositories/generations';
 import { insertPhoto } from '../src/server/db/repositories/photos';
 import { insert as insertReverseJob } from '../src/server/db/repositories/promptReverseJobs';
+import { getDay } from '../src/server/db/repositories/usage';
+import { getArk } from '../src/server/ark';
+import { MockArkProvider } from '../src/server/ark/mock';
 import { readFixture } from '../src/server/ark/fixtures';
+import { AIGC_MARKER, readPngText } from '../src/server/images/mark';
+import { buildKey, getStorage } from '../src/server/storage';
 import { confirmAnchor, revokeConsents } from '../src/server/domain/anchorService';
 import {
   assertAnchorGeneratable,
@@ -38,6 +46,7 @@ import {
 import { AppError } from '../src/server/domain/errors';
 import { dayKey, nowIso } from '../src/server/domain/time';
 import { reclaimStale } from '../src/jobs/worker';
+import { runGenerateJob } from '../src/jobs/handlers/generate';
 import { heartbeatPath, writeHeartbeat } from '../src/jobs/heartbeat';
 import { GET as getEraSceneConfig } from '../app/api/config/era-scene/route';
 import { GET as getHealth } from '../app/api/health/route';
@@ -749,6 +758,364 @@ checks.push(
         actual: `db.ok=${body.db.ok} eras=${body.db.eras} scenes=${body.db.scenes} profiles=${body.db.profiles}`,
       };
     },
+  },
+);
+
+// ── `tickets/T10` Seedream 生图调用与结果转存（`modules/M06-生成编排.md` §5.9、`spec/06` §3）──
+// 进程内直调 handler（`runGenerateJob`），不经 HTTP：`E2E-05`–`E2E-08`、`CMP-01`、`CMP-03`、`CMP-04`
+// 与 T09 延后的 `ERR-01` / `ERR-05`。每个用例自带清理（结果照片行 + 磁盘文件 + 审计行）。
+
+const sha256 = (buf: Buffer): string => createHash('sha256').update(buf).digest('hex');
+
+/**
+ * 造一张「文件真实存在」的 `preprocessed` 图：生成 handler 要读盘取 Base64，
+ * `E2E-04` 用的那张占位行（`bytes=1`、不落盘）会让 handler 直接 `STORAGE_ERROR`。
+ */
+const makePreprocessedWithFile = async (): Promise<number> => {
+  const buffer = await sharp({
+    create: { width: 64, height: 64, channels: 3, background: { r: 210, g: 180, b: 150 } },
+  })
+    .png()
+    .toBuffer();
+  const key = buildKey(DEV_USER, 'png');
+  await getStorage().save(key, buffer);
+  const photo = insertPhoto({
+    userId: DEV_USER,
+    kind: 'preprocessed',
+    storageKey: key,
+    mime: 'image/png',
+    bytes: buffer.length,
+    width: 64,
+    height: 64,
+    sha256: sha256(buffer),
+    sourcePhotoId: null,
+    qualityJson: null,
+    createdAt: nowIso(),
+  });
+  cleanups.push(() => {
+    try {
+      fs.rmSync(getStorage().resolveAbs(key), { force: true });
+    } catch {
+      /* 文件已被清理也不影响判定 */
+    }
+  });
+  cleanups.push(() => {
+    getDb().prepare('DELETE FROM photos WHERE id = ?').run(photo.id);
+  });
+  return photo.id;
+};
+
+/** 可走完生成链路的锚点：`succeeded` + 已确认 + `photo_usage` + `anchor_text` + **盘上有文件**的预处理图。 */
+const makeGeneratableAnchor = async (): Promise<number> => {
+  const photoId = await makePreprocessedWithFile();
+  const id = makeSucceededAnchor();
+  getDb()
+    .prepare(
+      `UPDATE identity_anchors SET preprocessed_photo_id = ?, confirmed_by_user = 1,
+              confirmed_at = ?, anchor_text = ? WHERE id = ?`,
+    )
+    .run(photoId, nowIso(), ANCHOR_SAMPLE.anchorText, id);
+  getDb()
+    .prepare("INSERT INTO consents (user_id, scope, anchor_id, agreed_at) VALUES (?, 'photo_usage', ?, ?)")
+    .run(DEV_USER, id, nowIso());
+  return id;
+};
+
+/** 删掉一次生成带来的行与磁盘文件（结果照片 + `photo.mark` / `generation.finish` 审计）。 */
+const purgeGeneration = (generationId: number): void => {
+  const photoIds = (
+    getDb()
+      .prepare('SELECT photo_id FROM generation_results WHERE generation_id = ?')
+      .all(generationId) as { photo_id: number }[]
+  ).map((r) => r.photo_id);
+  for (const photoId of photoIds) {
+    const row = getDb().prepare('SELECT storage_key FROM photos WHERE id = ?').get(photoId) as
+      | { storage_key: string }
+      | undefined;
+    if (row !== undefined) {
+      try {
+        fs.rmSync(getStorage().resolveAbs(row.storage_key), { force: true });
+      } catch {
+        /* 文件已被清理也不影响判定 */
+      }
+    }
+    getDb().prepare('DELETE FROM audit_logs WHERE target = ?').run(`photo:${photoId}`);
+    getDb().prepare('DELETE FROM photos WHERE id = ?').run(photoId);
+  }
+  getDb().prepare('DELETE FROM generation_results WHERE generation_id = ?').run(generationId);
+  getDb().prepare('DELETE FROM audit_logs WHERE target = ?').run(`generation:${generationId}`);
+  getDb().prepare('DELETE FROM generations WHERE id = ?').run(generationId);
+};
+
+interface ResultRow {
+  photo_id: number;
+  ordinal: number;
+  seed: number | null;
+}
+
+const resultRows = (generationId: number): ResultRow[] =>
+  getDb()
+    .prepare('SELECT photo_id, ordinal, seed FROM generation_results WHERE generation_id = ? ORDER BY ordinal')
+    .all(generationId) as ResultRow[];
+
+const generationRow = (generationId: number): { status: string; attempt: number; error_code: string | null } =>
+  getDb()
+    .prepare('SELECT status, attempt, error_code FROM generations WHERE id = ?')
+    .get(generationId) as { status: string; attempt: number; error_code: string | null };
+
+/** 结果照片行（`photos` 侧）：`E2E-06` / `CMP-01` 的读盘对象。 */
+const resultPhotos = (
+  generationId: number,
+): { id: number; kind: string; storage_key: string; bytes: number; sha256: string }[] =>
+  getDb()
+    .prepare(
+      `SELECT p.id, p.kind, p.storage_key, p.bytes, p.sha256 FROM generation_results r
+       JOIN photos p ON p.id = r.photo_id WHERE r.generation_id = ? ORDER BY r.ordinal`,
+    )
+    .all(generationId) as { id: number; kind: string; storage_key: string; bytes: number; sha256: string }[];
+
+const readResultFile = (generationId: number, index: number): Buffer => {
+  const photo = resultPhotos(generationId)[index];
+  if (photo === undefined) throw new Error(`generation ${generationId} 没有第 ${index} 张结果`);
+  return fs.readFileSync(getStorage().resolveAbs(photo.storage_key));
+};
+
+const markAuditRows = (photoIds: number[]): { meta_json: string | null }[] => {
+  if (photoIds.length === 0) return [];
+  const placeholders = photoIds.map(() => '?').join(', ');
+  return getDb()
+    .prepare(
+      `SELECT meta_json FROM audit_logs WHERE action = 'photo.mark' AND target IN (${placeholders})`,
+    )
+    .all(...photoIds.map((id) => `photo:${id}`)) as { meta_json: string | null }[];
+};
+
+const parseMeta = (row: { meta_json: string | null }): Record<string, unknown> =>
+  row.meta_json === null ? {} : (JSON.parse(row.meta_json) as Record<string, unknown>);
+
+let quotaRaised = false;
+/**
+ * T10 的用例要真跑生成（每次预扣 `count`），而 T09 的用例留下的预扣没有回滚，
+ * DEV_USER 的默认额度（20）会被撞满。这里临时抬高上限并在跑完还原（自带清理的一部分）。
+ */
+const raiseQuotaForGenerationChecks = (): void => {
+  if (quotaRaised) return;
+  quotaRaised = true;
+  const limit = currentQuota();
+  setQuota(10_000);
+  cleanups.push(() => setQuota(limit));
+};
+
+/**
+ * 每个用例一份独立的锚点与生成行：入队 → 调 handler → 断言 → 清理（行 + 盘上文件）。
+ * `imagesBefore` 在入队（预扣）之前取，供 `E2E-08` 量净增。
+ */
+const withGeneration = async <T>(
+  count: number,
+  fn: (ctx: { id: number; imagesBefore: number }) => Promise<T> | T,
+): Promise<T> => {
+  raiseQuotaForGenerationChecks();
+  const anchorId = await makeGeneratableAnchor();
+  snapshotUsage();
+  const imagesBefore = getDay(DEV_USER, dayKey()).images;
+  const record = createFor(anchorId, count);
+  cleanups.push(() => purgeGeneration(record.id));
+  try {
+    return await fn({ id: record.id, imagesBefore });
+  } finally {
+    purgeGeneration(record.id);
+  }
+};
+
+/** 直调 handler（与 worker 的调用形态一致：先读行再执行）。 */
+const runGeneration = async (generationId: number): Promise<void> => {
+  const record = findGenerationById(generationId);
+  if (record === null) throw new Error(`generation ${generationId} 不存在`);
+  await runGenerateJob(record);
+};
+
+/** 取锚点的预处理图（`CMP-01` 的「非生成文件读不到标识」样本）。 */
+const preprocessedStorageKey = (generationId: number): string => {
+  const row = getDb().prepare('SELECT reference_photo_ids FROM generations WHERE id = ?').get(generationId) as
+    | { reference_photo_ids: string }
+    | undefined;
+  const ids = JSON.parse(row?.reference_photo_ids ?? '[]') as number[];
+  const photoId = ids[0];
+  const photo = getDb().prepare('SELECT storage_key FROM photos WHERE id = ?').get(photoId) as
+    | { storage_key: string }
+    | undefined;
+  return photo?.storage_key ?? '';
+};
+
+checks.push(
+  {
+    id: 'E2E-05',
+    run: () =>
+      withGeneration(3, async ({ id }) => {
+        await runGeneration(id);
+        const rows = resultRows(id);
+        const ordinals = rows.map((r) => r.ordinal);
+        const { status } = generationRow(id);
+        const ok =
+          rows.length === 3 && ordinals.every((value, index) => value === index) && status === 'succeeded';
+        return {
+          ok,
+          expected: '3 行结果、ordinal=0,1,2、status=succeeded',
+          actual: `${rows.length} 行、ordinal=${ordinals.join(',')}、status=${status}`,
+        };
+      }),
+  },
+  {
+    id: 'E2E-06',
+    run: () =>
+      withGeneration(3, async ({ id }) => {
+        await runGeneration(id);
+        const photos = resultPhotos(id);
+        const bad = photos.filter((photo) => {
+          const abs = getStorage().resolveAbs(photo.storage_key);
+          return (
+            photo.kind !== 'generated' || !fs.existsSync(abs) || fs.statSync(abs).size !== photo.bytes
+          );
+        });
+        return {
+          ok: photos.length === 3 && bad.length === 0,
+          expected: '3 张 kind=generated、盘上文件存在且字节数 == photos.bytes',
+          actual: `${photos.length} 张、不合规 ${bad.length} 张`,
+        };
+      }),
+  },
+  {
+    id: 'E2E-07',
+    run: () =>
+      withGeneration(3, async ({ id }) => {
+        await runGeneration(id);
+        const distinct = new Set(resultPhotos(id).map((photo) => photo.sha256));
+        return {
+          ok: distinct.size >= 2,
+          expected: '≥ 2 张结果 sha256 互异',
+          actual: `${distinct.size} 个不同的 sha256`,
+        };
+      }),
+  },
+  {
+    id: 'E2E-08',
+    run: () =>
+      withGeneration(3, async ({ id, imagesBefore }) => {
+        await runGeneration(id);
+        const after = getDay(DEV_USER, dayKey()).images;
+        return {
+          ok: after - imagesBefore === 3 && generationRow(id).status === 'succeeded',
+          expected: `usage_counters.images 净增 3（${imagesBefore} → ${imagesBefore + 3}）`,
+          actual: `净增 ${after - imagesBefore}（${imagesBefore} → ${after}）`,
+        };
+      }),
+  },
+  {
+    id: 'CMP-01',
+    run: () =>
+      withGeneration(3, async ({ id }) => {
+        await runGeneration(id);
+        const generated = resultPhotos(id);
+        const markers = generated.map((_photo, index) => readPngText(readResultFile(id, index), 'AIGC'));
+        const preprocessed = readPngText(
+          fs.readFileSync(getStorage().resolveAbs(preprocessedStorageKey(id))),
+          'AIGC',
+        );
+        return {
+          ok: markers.length === 3 && markers.every((value) => value === AIGC_MARKER) && preprocessed === null,
+          expected: '3 张生成图都能读回 AIGC == AIGC_MARKER；预处理图读不到',
+          actual: `生成图命中 ${markers.filter((v) => v === AIGC_MARKER).length}/3，预处理图=${String(preprocessed)}`,
+        };
+      }),
+  },
+  {
+    id: 'CMP-03',
+    run: () =>
+      withGeneration(3, async ({ id }) => {
+        await runGeneration(id);
+        const photoIds = resultRows(id).map((row) => row.photo_id);
+        const audits = markAuditRows(photoIds);
+        const failed = audits.filter((row) => parseMeta(row).mode === 'failed');
+        return {
+          ok: audits.length === photoIds.length && failed.length === 0,
+          expected: 'photo.mark 行数 == 生成张数、无 meta_json.mode=failed',
+          actual: `${audits.length} 行审计、mode=failed ${failed.length} 行`,
+        };
+      }),
+  },
+  {
+    id: 'CMP-04',
+    run: () =>
+      withGeneration(2, async ({ id }) => {
+        const saved = process.env.AIGC_IMPLICIT_MARKER;
+        process.env.AIGC_IMPLICIT_MARKER = 'false';
+        try {
+          await runGeneration(id);
+          const photoIds = resultRows(id).map((row) => row.photo_id);
+          const audits = markAuditRows(photoIds);
+          const modes = audits.map((row) => parseMeta(row).mode);
+          const markers = resultPhotos(id).map((_photo, index) => readPngText(readResultFile(id, index), 'AIGC'));
+          return {
+            ok:
+              audits.length === photoIds.length &&
+              modes.length > 0 &&
+              modes.every((mode) => mode === 'off') &&
+              markers.every((value) => value === null),
+            expected: '审计行照写且 mode=off、文件读不到标识',
+            actual: `${audits.length} 行审计 mode=${modes.join(',')}、文件命中 ${markers.filter((v) => v !== null).length}`,
+          };
+        } finally {
+          if (saved === undefined) delete process.env.AIGC_IMPLICIT_MARKER;
+          else process.env.AIGC_IMPLICIT_MARKER = saved;
+        }
+      }),
+  },
+  {
+    id: 'ERR-01',
+    run: () =>
+      withGeneration(2, async ({ id }) => {
+        const provider = getArk() as MockArkProvider;
+        provider.setFailure('timeout');
+        try {
+          // 第一次：零产出的瞬时错误 → 自动重试一次（attempt 0 → 1，回到 queued）
+          await runGeneration(id);
+          const mid = generationRow(id);
+          // 第二次：attempt 已用掉 → 落 failed
+          await runGeneration(id);
+          const row = generationRow(id);
+          return {
+            ok:
+              mid.status === 'queued' &&
+              mid.attempt === 1 &&
+              row.status === 'failed' &&
+              row.error_code === 'PROVIDER_TIMEOUT' &&
+              row.attempt === 1,
+            expected: '重试一次后 failed / PROVIDER_TIMEOUT / attempt=1',
+            actual: `中间态 ${mid.status}/${mid.attempt}，终态 ${row.status}/${row.error_code}/${row.attempt}`,
+          };
+        } finally {
+          provider.setFailure(null);
+        }
+      }),
+  },
+  {
+    id: 'ERR-05',
+    run: () =>
+      withGeneration(2, async ({ id }) => {
+        const provider = getArk() as MockArkProvider;
+        provider.setFailure('model-not-open');
+        try {
+          await runGeneration(id);
+          const row = generationRow(id);
+          return {
+            ok: row.status === 'failed' && row.error_code === 'PROVIDER_ERROR' && row.attempt === 0,
+            expected: 'failed / PROVIDER_ERROR / attempt=0（不可重试）',
+            actual: `${row.status}/${row.error_code}/${row.attempt}`,
+          };
+        } finally {
+          provider.setFailure(null);
+        }
+      }),
   },
 );
 

@@ -30,10 +30,12 @@ interface ImageResponse {
   model?: string;
 }
 
-const postJson = async (pathname: string, body: unknown): Promise<unknown> => {
+const postJson = async (pathname: string, body: unknown, signal?: AbortSignal): Promise<unknown> => {
   const apiKey = process.env.ARK_API_KEY;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs());
+  const onAbort = (): void => controller.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
   let response: Response;
   try {
     response = await fetch(`${baseUrl()}${pathname}`, {
@@ -53,6 +55,7 @@ const postJson = async (pathname: string, body: unknown): Promise<unknown> => {
     });
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
   }
 
   const text = await response.text();
@@ -100,7 +103,7 @@ export class RealArkProvider implements ArkProvider {
     return { raw: content, model: arkVisionModel() };
   }
 
-  async generateImage(request: ArkImageRequest): Promise<ArkImageResult> {
+  async generateImage(request: ArkImageRequest, signal?: AbortSignal): Promise<ArkImageResult> {
     const body: Record<string, unknown> = {
       model: arkImageModel(),
       prompt: request.prompt,
@@ -113,7 +116,7 @@ export class RealArkProvider implements ArkProvider {
       body.sequential_image_generation = 'auto';
       body.sequential_image_generation_options = { max_images: request.count };
     }
-    const data = (await postJson('/images/generations', body)) as ImageResponse;
+    const data = (await postJson('/images/generations', body, signal)) as ImageResponse;
     const images = (data.data ?? []).map((item) => ({
       url: item.url ?? '',
       size: item.size ?? null,

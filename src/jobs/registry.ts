@@ -1,9 +1,14 @@
 import { findNextQueuedId as findNextAnchorId, markFailed } from '../server/db/repositories/anchors';
-import { findNextQueuedId as findNextGenerationId } from '../server/db/repositories/generations';
+import {
+  findById as findGenerationById,
+  findNextQueuedId as findNextGenerationId,
+} from '../server/db/repositories/generations';
 import { findNextQueuedId as findNextReverseJobId } from '../server/db/repositories/promptReverseJobs';
 import { ERROR_MESSAGE } from '../server/domain/errors';
 import { nowIso } from '../server/domain/time';
 import { anchorExtractHandler } from './handlers/anchorExtract';
+import { runGenerateJob } from './handlers/generate';
+import { settleJobFailure } from './worker';
 
 /**
  * 任务类型 → handler 的映射，以及 worker 的三张任务表轮转来源
@@ -29,6 +34,10 @@ export type JobHandlerMap = { [K in JobType]?: JobHandler<K> };
 /** 只有落成 handler 的任务类型才出现在这里（`tickets/T10` / `tickets/T18` 追加）。 */
 export const JOB_HANDLERS: JobHandlerMap = {
   'anchor.extract': anchorExtractHandler,
+  generate: async ({ generationId, signal }) => {
+    const record = findGenerationById(generationId);
+    if (record !== null) await runGenerateJob(record, signal);
+  },
 };
 
 export interface TaskSource {
@@ -57,5 +66,22 @@ export const TASK_SOURCES: TaskSource[] = [
       }),
   },
   { jobType: 'reverse.prompt', findNextQueuedId: findNextReverseJobId },
-  { jobType: 'generate', findNextQueuedId: findNextGenerationId },
+  {
+    jobType: 'generate',
+    findNextQueuedId: findNextGenerationId,
+    // 超时兜底：走与 handler 失败分支同一套判据（可重试 → 回 queued，否则落 failed），
+    // 否则被打断的生成会永远停在 `running`（`tickets/T10`）。
+    onTimeout: (id) => {
+      const record = findGenerationById(id);
+      if (record === null) return;
+      settleJobFailure({
+        table: 'generations',
+        id,
+        attempt: record.attempt,
+        produced: 0,
+        code: 'PROVIDER_TIMEOUT',
+        rawMessage: ERROR_MESSAGE.PROVIDER_TIMEOUT,
+      });
+    },
+  },
 ];
