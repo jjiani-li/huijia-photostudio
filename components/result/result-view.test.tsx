@@ -56,13 +56,16 @@ const render = (over: Partial<Parameters<typeof ResultView>[0]> = {}): string =>
     <ResultView
       generation={generation()}
       phase="done"
+      inProgress={false}
       workerAlive={null}
       pendingFeedbackId={null}
       notice={null}
+      quotaNotice={null}
       retryBusy={false}
       openIndex={null}
       onFeedback={() => undefined}
       onRetry={() => undefined}
+      onNoticeRetry={() => undefined}
       onDownloadAll={() => undefined}
       onOpen={() => undefined}
       onCloseLightbox={() => undefined}
@@ -166,18 +169,29 @@ describe('三态与超时（§5、§6）', () => {
     expect(html).not.toContain('role="alert"');
   });
 
-  it('worker.alive=true 时不报错', () => {
+  it('workerAlive=true 时不报错', () => {
     expect(render({ generation: generation({ status: 'queued', results: [] }), workerAlive: true })).not.toContain('后台还没启动');
   });
 
+  it('workerAlive=null（健康检查未回 / 失败）不误报未启动', () => {
+    const html = render({ generation: generation({ status: 'queued', results: [] }), workerAlive: null });
+    expect(html).not.toContain('后台还没启动');
+    expect(html).not.toContain('pnpm worker');
+  });
+
+  it('终态即使 worker 未存活也不报错（提示只在 queued）', () => {
+    const html = render({ generation: generation({ status: 'succeeded' }), workerAlive: false });
+    expect(html).not.toContain('后台还没启动');
+  });
+
   it('非终态出定性进度，无百分比', () => {
-    const html = render({ generation: generation({ status: 'running' }), phase: 'polling' });
+    const html = render({ generation: generation({ status: 'running' }), inProgress: true, phase: 'polling' });
     expect(html).toContain('正在生成，大概要等一会儿');
     expect(html).not.toContain('%');
   });
 
   it('超时保留 `继续看进度` 与超时文案', () => {
-    const html = render({ generation: generation({ status: 'running' }), phase: 'timedOut' });
+    const html = render({ generation: generation({ status: 'running' }), inProgress: true, phase: 'timedOut' });
     expect(html).toContain('还在处理，可以先去别处看看');
     expect(html).toContain('继续看进度');
   });
@@ -207,6 +221,23 @@ describe('三态与超时（§5、§6）', () => {
   it('反馈 / retry 的错误走 ErrorNotice（inline）', () => {
     const html = render({ notice: { code: 'GENERATION_IN_PROGRESS', message: '上一组还在生成，稍等一下' } });
     expect(html).toContain('上一组还在生成，稍等一下');
+  });
+
+  it('可重试的错误带可重试控件（onNoticeRetry）', () => {
+    const html = render({
+      notice: { code: 'PROVIDER_ERROR', message: '生成服务暂时不可用，请稍后重试' },
+      onNoticeRetry: () => undefined,
+    });
+    expect(html).toContain('生成服务暂时不可用，请稍后重试');
+    expect(html).toContain('重试');
+  });
+
+  it('额度用尽时另给额度行（quota.remaining / quota.limit，P00 §8）', () => {
+    const html = render({
+      notice: { code: 'QUOTA_EXCEEDED', message: '今天的生成额度用完了，明天再来吧' },
+      quotaNotice: '今天还能生成 0 张（每天 20 张）',
+    });
+    expect(html).toContain('今天还能生成 0 张（每天 20 张）');
   });
 });
 

@@ -12,14 +12,15 @@ import { shouldShowWorkerNotice } from '../hooks/use-health';
  * 「错误红」只留给真正的错误。文案与 `pnpm worker` 一行命令逐字固定（`pages/P03` §5）。
  */
 export interface WorkerNoticeProps {
-  /** `GET /api/health` 的 `worker.alive`。 */
-  alive: boolean;
+  /** `GET /api/health` 的 `worker.alive`；**未取到为 `null`**（`null` 不等于未存活，不提示）。 */
+  alive: boolean | null;
   /** 由宿主页决定何时该出现（如 `status === 'queued'`）。 */
   visible: boolean;
 }
 
 export function WorkerNotice({ alive, visible }: WorkerNoticeProps): ReactNode {
-  // 判据与 `use-health` 的 `shouldShowWorkerNotice` 同源：`alive === false` 才算未存活。
+  // 判据与 `use-health` 的 `shouldShowWorkerNotice` 同源：**只有 `alive === false`** 才算未存活——
+  // `null`（健康检查未回 / 失败）不得当成未启动，否则会误报。
   if (!visible || !shouldShowWorkerNotice({ workerAlive: alive })) return null;
   return (
     <div className="rounded-md border border-border bg-surface px-lg py-md animate-fade-in">

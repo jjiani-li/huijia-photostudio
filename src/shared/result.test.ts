@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { EraCheck } from './types';
-import { downloadFileName, eraCheckBadge, FEEDBACK_OPTIONS, nextFeedback, ageDeltaNotice } from './result';
+import { downloadFileName, eraCheckBadge, FEEDBACK_OPTIONS, nextFeedback, ageDeltaNotice, quotaLine } from './result';
 
 /**
  * 结果页 / 历史页的纯函数（`docs/prd/pages/P03-结果历史与下载.md` §10）：
@@ -67,8 +67,7 @@ describe('downloadFileName（§6、§10）', () => {
   });
 });
 
-describe('nextFeedback（§6：再点同一按钮传 null）', () => {
-  it('三个值互斥：点另一个值改写', () => {
+describe('nextFeedback（§6：再点同一按钮传 null）', () => {  it('三个值互斥：点另一个值改写', () => {
     expect(nextFeedback(null, 1)).toBe(1);
     expect(nextFeedback(-1, 1)).toBe(1);
     expect(nextFeedback(1, -2)).toBe(-2);
@@ -83,5 +82,12 @@ describe('nextFeedback（§6：再点同一按钮传 null）', () => {
   it('按钮文案与取值一一对应', () => {
     expect(FEEDBACK_OPTIONS.map((o) => o.label)).toEqual(['喜欢', '不喜欢', '不像他']);
     expect(FEEDBACK_OPTIONS.map((o) => o.value)).toEqual([1, -1, -2]);
+  });
+});
+
+describe('quotaLine（P00 §8：额度用尽时显示 remaining / limit）', () => {
+  it('两个数字都出', () => {
+    expect(quotaLine(0, 20)).toBe('今天还能生成 0 张（每天 20 张）');
+    expect(quotaLine(3, 20)).toBe('今天还能生成 3 张（每天 20 张）');
   });
 });

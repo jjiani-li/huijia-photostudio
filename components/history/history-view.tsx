@@ -121,7 +121,7 @@ export function HistoryView({
 
   return (
     <section className="flex flex-col gap-2xl animate-fade-in">
-      <WorkerNotice alive={workerAlive === true} visible />
+      <WorkerNotice alive={workerAlive} visible />
       <h1 className="font-serif text-title text-ink">生成过的记录</h1>
 
       {noticeLines.length > 0 ? (

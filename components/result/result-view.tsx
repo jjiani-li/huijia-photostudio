@@ -23,17 +23,23 @@ export interface ResultViewProps {
   generation: Generation;
   /** `useJobPolling` 的相位（超时态显示 `继续看进度`）。 */
   phase: PollPhase;
-  /** `GET /api/health` 的 `worker.alive`；未取到为 `null`。 */
+  /** 由容器判定：`generation.status` 是否非终态（`succeeded` / `partial` / `failed` 之外）。 */
+  inProgress: boolean;
+  /** `GET /api/health` 的 `worker.alive`；未取到为 `null`（不得当成未启动）。 */
   workerAlive: boolean | null;
   /** 正在发反馈请求的结果 id。 */
   pendingFeedbackId: number | null;
-  /** 反馈 / retry 的错误（网络与错误码），走 `ErrorNotice`。 */
+  /** 反馈 / retry / 轮询的错误（网络与错误码），走 `ErrorNotice`。 */
   notice: ApiNotice | null;
+  /** `notice` 为 `QUOTA_EXCEEDED` 时的额度行（`pages/P00-设计基准与路由.md` §8）。 */
+  quotaNotice: string | null;
   retryBusy: boolean;
   /** 放大查看的序号；`null` 表示未打开。 */
   openIndex: number | null;
   onFeedback: (resultId: number, feedback: FeedbackValue | null) => void;
   onRetry: () => void;
+  /** `notice` 的重试入口（`ErrorNotice` 的可重试控件）；轮询失败时接 `refreshNow`。 */
+  onNoticeRetry: () => void;
   onDownloadAll: () => void;
   onOpen: (resultId: number) => void;
   onCloseLightbox: () => void;
@@ -41,33 +47,32 @@ export interface ResultViewProps {
   onRefreshNow: () => void;
 }
 
-const TERMINAL: ReadonlyArray<Generation['status']> = ['succeeded', 'partial', 'failed'];
-
 /** 非终态的定性进度说明（`pages/P00-设计基准与路由.md` §3.1：不出现百分比、剩余张数与倒计时）。 */
 const PROGRESS_LABEL = '正在生成，大概要等一会儿';
 
 export function ResultView({
   generation,
   phase,
+  inProgress,
   workerAlive,
   pendingFeedbackId,
   notice,
+  quotaNotice,
   retryBusy,
   openIndex,
   onFeedback,
   onRetry,
+  onNoticeRetry,
   onDownloadAll,
   onOpen,
   onCloseLightbox,
   onLightboxIndexChange,
   onRefreshNow,
 }: ResultViewProps): ReactNode {
-  const inProgress = !TERMINAL.includes(generation.status);
-
   return (
     <section className="flex flex-col gap-2xl animate-fade-in">
       <SafetyNotice />
-      <WorkerNotice alive={workerAlive === true} visible={generation.status === 'queued'} />
+      <WorkerNotice alive={workerAlive} visible={generation.status === 'queued'} />
       <GenerationHeader generation={generation} />
 
       {inProgress ? <AsyncStatus label={PROGRESS_LABEL} timedOut={phase === 'timedOut'} onRefreshNow={onRefreshNow} /> : null}
@@ -98,7 +103,12 @@ export function ResultView({
         </div>
       ) : null}
 
-      <ErrorNotice error={notice} variant="inline" />
+      <ErrorNotice
+        error={notice}
+        variant="inline"
+        onRetry={onNoticeRetry}
+        action={quotaNotice === null ? null : <span className="text-note text-ink-soft">{quotaNotice}</span>}
+      />
 
       {openIndex !== null ? (
         <Lightbox

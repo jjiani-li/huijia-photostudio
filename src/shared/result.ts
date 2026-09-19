@@ -59,6 +59,9 @@ export const ageDeltaNotice = (ageDelta: number | null): string | null => {
   return ageDelta < 0 ? `看起来比原照片年轻了 ${years} 岁` : `看起来比原照片年长 ${years} 岁`;
 };
 
+/** 额度不足时的第二行（`pages/P02-年代与场景选择.md` §7、`pages/P00-设计基准与路由.md` §8）：两个数字都要出。 */
+export const quotaLine = (remaining: number, limit: number): string => `今天还能生成 ${remaining} 张（每天 ${limit} 张）`;
+
 /**
  * 下载文件名（`docs/prd/pages/P03-结果历史与下载.md` §6、§10）：
  * `回家照相馆-{eraName}-{sceneName}-{ordinal + 1}.{ext}`；`ext` 从 `Generation.params.outputFormat`

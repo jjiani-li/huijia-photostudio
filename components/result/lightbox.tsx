@@ -15,15 +15,20 @@ export interface LightboxProps {
   onIndexChange: (i: number) => void;
 }
 
+/** 首尾相接的下标（键盘与按钮共用同一处取模）。 */
+const stepIndex = (index: number, delta: number, total: number): number =>
+  total === 0 ? index : (index + delta + total) % total;
+
 export function Lightbox({ results, index, onClose, onIndexChange }: LightboxProps): ReactNode {
   const total = results.length;
+  const step = (delta: number): void => onIndexChange(stepIndex(index, delta, total));
 
   useEffect(() => {
     if (total === 0) return;
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') onClose();
-      if (event.key === 'ArrowLeft') onIndexChange((index - 1 + total) % total);
-      if (event.key === 'ArrowRight') onIndexChange((index + 1) % total);
+      if (event.key === 'ArrowLeft') onIndexChange(stepIndex(index, -1, total));
+      if (event.key === 'ArrowRight') onIndexChange(stepIndex(index, 1, total));
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -47,13 +52,13 @@ export function Lightbox({ results, index, onClose, onIndexChange }: LightboxPro
         onClick={(event) => event.stopPropagation()}
       />
       <div className="flex items-center gap-lg">
-        <button type="button" onClick={() => onIndexChange((index - 1 + results.length) % results.length)} className="text-note text-background">
+        <button type="button" onClick={() => step(-1)} className="text-note text-background">
           上一张
         </button>
         <button type="button" onClick={onClose} className="text-note text-background">
           关闭
         </button>
-        <button type="button" onClick={() => onIndexChange((index + 1) % results.length)} className="text-note text-background">
+        <button type="button" onClick={() => step(1)} className="text-note text-background">
           下一张
         </button>
       </div>

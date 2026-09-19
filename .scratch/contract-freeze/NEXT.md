@@ -19,7 +19,7 @@
 - `scripts/check-docs.mjs`：17 条静态断言；`--root` 指夹具树、`--write-index` 按工单表头重写 `tickets/README.md` 的检查项列。
 - `scripts/check-docs.test.mjs`：50 个夹具用例（新增断言必须配用例）。
 - `scripts/acceptance.ts`：B 层执行器，现 **52 passed**（进程内直连 domain/端点，自带清理；`CMP-06` 是静态扫描：语义句落点 + 会话态不落 web storage）。
-- 产品骨架：Next 15 + TS strict + vitest（**494 用例**）+ eslint/tsconfig/`package.json` + Tailwind（`tailwind.config.ts` 为 Token 唯一落点）。
+- 产品骨架：Next 15 + TS strict + vitest（**499 用例**）+ eslint/tsconfig/`package.json` + Tailwind（`tailwind.config.ts` 为 Token 唯一落点）。
 
 ## 一条 ticket 的做法（T01–T14 都按这个走）
 
