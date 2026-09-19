@@ -20,8 +20,17 @@ export interface JobFailureInput {
   /** 本次成功转存并落库的结果数；`> 0` 时不得自动重试。 */
   produced: number;
   code: ErrorCode;
-  /** 上游原文：只落库供排查，响应里的 `error.message` 一律取文案表（`spec/04` §4.1）。 */
+  /**
+   * 落 `error_message` 的值。**由调用方决定语义**：需要把上游原文留库供排查时传原文，
+   * 契约禁止把模型原文透给用户时（反推任务，`modules/M09-图片反推提示词.md` §5.4）传用户可见文案。
+   */
   rawMessage: string;
+  /**
+   * 该错误在上游侧是否属瞬时可重试（`docs/prd/spec/04-技术基线与目录结构.md` §4.6 要求以
+   * `modules/M06-生成编排.md` §5.8 的「可重试」列为准，比 `AUTO_RETRY_ERROR_CODES` 更窄——
+   * 例如 `ModelNotOpen` 落 `PROVIDER_ERROR` 但标 ❌）。缺省 `true`，即只按错误码集合判定。
+   */
+  retryable?: boolean;
 }
 
 /** 自动重试的瞬时错误集合（§4.6；`SQLITE_BUSY` 已映射为 `STORAGE_ERROR`）。 */
@@ -82,6 +91,8 @@ const SETTLE_OPS: Record<JobTable, SettleOps> = {
  * 失败处置的唯一入口：可重试 → 置回 `queued` 且 `attempt + 1`（`attempt` 只在重试时自增，
  * claim 阶段不动）；否则落终态 `failed`（`attempt` 保持不变）。
  *
+ * `input.retryable === false` 时直接落终态（§4.6：可重试性以 `modules/M06` §5.8 的列为准）。
+ *
  * 注意：本函数**不**做额度回滚与 `generation.finish` 审计——`generations` 的终态必须连同回滚与审计
  * 在同一事务内完成（`modules/M06-生成编排.md` §5.3/§5.6/§5.9⑥），那条路径由
  * `src/jobs/handlers/generate.ts` 的 `finalize()` 负责；本函数只服务 `identity_anchors` /
@@ -89,7 +100,7 @@ const SETTLE_OPS: Record<JobTable, SettleOps> = {
  */
 export const settleJobFailure = (input: JobFailureInput): 'requeued' | 'failed' => {
   const ops = SETTLE_OPS[input.table];
-  if (isAutoRetryable(input)) {
+  if (input.retryable !== false && isAutoRetryable(input)) {
     ops.requeueForRetry({ id: input.id, attempt: input.attempt + 1, code: input.code, raw: input.rawMessage });
     return 'requeued';
   }

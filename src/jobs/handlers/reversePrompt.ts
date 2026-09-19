@@ -8,8 +8,6 @@ import {
   claimForRun,
   findById,
   markSucceeded,
-  markTerminalFailure,
-  requeueForRetry,
 } from '../../server/db/repositories/promptReverseJobs';
 import { REVERSE_V1_SYSTEM_PROMPT } from '../../server/prompt/versions';
 import { getStorage } from '../../server/storage';
@@ -18,7 +16,7 @@ import {
   type ErrorCode,
   type PromptReverseDetail,
 } from '../../shared/types';
-import { AUTO_RETRY_ERROR_CODES, isAutoRetryable } from '../settle';
+import { AUTO_RETRY_ERROR_CODES, settleJobFailure } from '../settle';
 import { stripFence } from './anchorExtract';
 
 /**
@@ -145,26 +143,30 @@ const toFailure = (err: unknown): ReverseFailure => {
 };
 
 /**
- * 失败落库（`docs/prd/spec/04-技术基线与目录结构.md` §4.6）：本次零产出、错误码属瞬时集合、
- * 且该错误在 `modules/M06-生成编排.md` §5.8 的「可重试」列也标可重试、`attempt < 1` → 置回
- * `queued` 并 `attempt + 1`；否则落终态 `failed`。
+ * 失败落库（`docs/prd/spec/04-技术基线与目录结构.md` §4.6）：走 `src/jobs/settle.ts` 的唯一入口
+ * `settleJobFailure`——本次零产出、错误码属瞬时集合、`attempt < 1` 且该错误在
+ * `modules/M06-生成编排.md` §5.8 的「可重试」列也标可重试 → 置回 `queued` 并 `attempt + 1`；
+ * 否则落终态 `failed`。
  *
- * `error_message` 一律写文案表（`modules/M09-图片反推提示词.md` §5.4：模型原文只进 `logger.warn`，
- * 不落库，避免透给用户）。
+ * `error_message` 传用户可见文案：`modules/M09-图片反推提示词.md` §5.4 要求模型原文只进
+ * `logger.warn`、**不进 `error_message`**（避免把上游原文透给用户）。
  */
-export const settleReverseFailure = (
-  record: { id: number; attempt: number },
-  failure: ReverseFailure,
-): 'requeued' | 'failed' => {
-  if (
-    failure.retryable &&
-    isAutoRetryable({ code: failure.code, attempt: record.attempt, produced: 0 })
-  ) {
-    requeueForRetry(record.id, record.attempt + 1, failure.code, ERROR_MESSAGE[failure.code]);
-    return 'requeued';
+const fail = (record: { id: number; attempt: number }, failure: ReverseFailure): void => {
+  try {
+    const outcome = settleJobFailure({
+      table: 'prompt_reverse_jobs',
+      id: record.id,
+      attempt: record.attempt,
+      produced: 0,
+      code: failure.code,
+      rawMessage: ERROR_MESSAGE[failure.code],
+      retryable: failure.retryable,
+    });
+    log('warn', 'settled', { jobId: record.id, code: failure.code, outcome });
+  } catch (err) {
+    // 落库失败也只记日志，绝不抛出（worker 主循环必须活着）。
+    log('error', 'settle 落库失败', { jobId: record.id, code: failure.code, error: String(err) });
   }
-  markTerminalFailure(record.id, failure.code, ERROR_MESSAGE[failure.code], nowIso());
-  return 'failed';
 };
 
 /**
@@ -174,12 +176,9 @@ export const settleReverseFailure = (
 export const failTimedOutReverseJob = (id: number): void => {
   const record = findById(id);
   if (record === null || record.status !== 'running') return;
-  const outcome = settleReverseFailure(record, {
-    code: 'PROVIDER_TIMEOUT',
-    retryable: true,
-    raw: 'job timed out',
-  });
-  log('warn', 'timeout settled', { jobId: id, outcome, attempt: record.attempt });
+  const startedAtMs = Date.now();
+  fail(record, { code: 'PROVIDER_TIMEOUT', retryable: true, raw: 'job timed out' });
+  log('info', 'timeout settled', { jobId: id, attempt: record.attempt, ms: Date.now() - startedAtMs });
 };
 
 export interface ReversePromptJob {
@@ -204,16 +203,6 @@ export const reversePromptHandler = async (job: ReversePromptJob): Promise<void>
     return;
   }
 
-  /** 落库本身失败也只记日志，绝不抛出（worker 主循环必须活着）。 */
-  const fail = (failure: ReverseFailure): void => {
-    try {
-      const outcome = settleReverseFailure(record, failure);
-      log('warn', 'settled', { jobId: record.id, code: failure.code, outcome });
-    } catch (err) {
-      log('error', 'settle 落库失败', { jobId: record.id, code: failure.code, error: String(err) });
-    }
-  };
-
   try {
     // ② 读源照片：入队时已校验，此处读不到是「入队后被删」的竞态，属我方数据问题（同 `M03` §5.3）。
     const photo = findActivePhotoForUser(record.sourcePhotoId, record.userId);
@@ -235,12 +224,12 @@ export const reversePromptHandler = async (job: ReversePromptJob): Promise<void>
         // 模型原文只进日志（§5.4）：不进 `error_message`，避免把上游原文透给用户。
         content: result.raw.slice(0, CONTENT_LOG_LIMIT),
       });
-      fail({ code: 'PROVIDER_ERROR', retryable: true, raw: parsed.reason });
+      fail(record, { code: 'PROVIDER_ERROR', retryable: true, raw: parsed.reason });
       return;
     }
 
     // ④ 成功落库：`result_json`（五键）/ `result_prompt` 非空，推荐值可空。
-    markSucceeded({
+    const changes = markSucceeded({
       id: record.id,
       result: parsed.result,
       resultPrompt: parsed.resultPrompt,
@@ -248,6 +237,11 @@ export const reversePromptHandler = async (job: ReversePromptJob): Promise<void>
       suggestSceneId: parsed.suggestSceneId,
       finishedAt: nowIso(),
     });
+    // `changes === 0`：该行已被判定为终态（`JOB_TIMEOUT_SECONDS` 兜底先落库），不覆盖别人的终态。
+    if (changes === 0) {
+      log('warn', 'succeeded 落库被跳过（行已非 running）', { jobId: record.id, ms: Date.now() - startedAtMs });
+      return;
+    }
     log('info', 'done', {
       jobId: record.id,
       suggestEraCode: parsed.suggestEraCode,
@@ -262,6 +256,6 @@ export const reversePromptHandler = async (job: ReversePromptJob): Promise<void>
       reason: failure.raw.slice(0, CONTENT_LOG_LIMIT),
       ms: Date.now() - startedAtMs,
     });
-    fail(failure);
+    fail(record, failure);
   }
 };

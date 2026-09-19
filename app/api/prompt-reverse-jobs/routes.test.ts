@@ -163,8 +163,9 @@ describe('API-08 · 端点存在与字段形状', () => {
     expect(job.error).toBeNull();
   });
 
-  it('请求体不是声明形状 → 400 INVALID_PARAM（缺 `photoId` / 多带未声明键的值 / 非正整数）', async () => {
-    for (const payload of [{}, { photoId: 0 }, { photoId: '1' }, { photoId: 1.5 }, { photo: 1 }]) {
+  it('请求体不含声明的 `photoId` → 400 INVALID_PARAM（缺参 / 类型不符 / 非正整数）', async () => {
+    // 注意：仓库其余端点一样是**非严格**请求体（zod 丢弃未声明键），故这里只断言 `photoId` 本身的问题。
+    for (const payload of [{}, { photo: 1 }, { photoId: 0 }, { photoId: '1' }, { photoId: 1.5 }]) {
       const res = await POST(post(payload), ctx({}));
       expect(res.status, JSON.stringify(payload)).toBe(400);
       expect(await codeOf(res)).toBe('INVALID_PARAM');

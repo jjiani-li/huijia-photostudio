@@ -1,4 +1,4 @@
-import { appError, ERROR_MESSAGE } from './errors';
+import { appError, errorMessageOf } from './errors';
 import { nowIso } from './time';
 import { findActivePhotoForUser } from '../db/repositories/photos';
 import {
@@ -7,7 +7,7 @@ import {
   type PromptReverseJobRecord,
 } from '../db/repositories/promptReverseJobs';
 import { arkVisionModel } from '../ark';
-import type { ErrorCode, PromptReverseJob } from '../../shared/types';
+import type { PromptReverseJob } from '../../shared/types';
 
 /**
  * F4 图片反推提示词的编排（`docs/prd/modules/M09-图片反推提示词.md` §4、§7）。
@@ -46,9 +46,6 @@ export const createReverseJob = (input: CreateReverseJobInput): PromptReverseJob
   return toPromptReverseJobDto(record);
 };
 
-/** 错误码 → 用户可见文案；`error_code` 是 `PromptReverseJob.error.code` 的来源（`modules/M09` §3）。 */
-const errorMessageOf = (code: string): string => ERROR_MESSAGE[code as ErrorCode] ?? ERROR_MESSAGE.INTERNAL;
-
 /**
  * `PromptReverseJobRecord` → `PromptReverseJob`（`docs/prd/spec/03-接口契约.md` §3.8、§4）：
  * 非终态时四个产物字段一律 `null`（不把 `running` 的半成品透出去）；`failed` 时 `error` 非空，
@@ -65,7 +62,10 @@ export const toPromptReverseJobDto = (record: PromptReverseJobRecord): PromptRev
     resultPrompt: succeeded ? record.resultPrompt : null,
     suggestEraCode: succeeded ? record.suggestEraCode : null,
     suggestSceneId: succeeded ? record.suggestSceneId : null,
-    error: record.errorCode === null ? null : { code: record.errorCode, message: errorMessageOf(record.errorCode) },
+    error:
+      record.errorCode === null
+        ? null
+        : { code: record.errorCode, message: errorMessageOf(record.errorCode) },
     createdAt: record.createdAt,
     finishedAt: record.finishedAt,
   };

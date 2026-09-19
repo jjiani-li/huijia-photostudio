@@ -71,3 +71,10 @@ export class AppError extends Error {
 /** 按 `code` 取状态码与文案的构造入口；`details` 仅用于开发调试。 */
 export const appError = (code: ErrorCode, details?: unknown): AppError =>
   new AppError(code, ERROR_MESSAGE[code], ERROR_STATUS[code], details);
+
+/**
+ * 库里的 `error_code`（`TEXT`，类型上不是 `ErrorCode`）→ 用户可见文案（`docs/prd/spec/04-技术基线与目录结构.md`
+ * §4.1：响应里的 `error.message` 一律取文案表，**不回显库里的原文**）。认不出的码兜底 `INTERNAL`。
+ */
+export const errorMessageOf = (code: string): string =>
+  ERROR_MESSAGE[code as ErrorCode] ?? ERROR_MESSAGE.INTERNAL;

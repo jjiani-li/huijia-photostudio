@@ -141,6 +141,9 @@ export const requeueForRetry = (id: number, attempt: number, errorCode: string, 
 /**
  * 落终态 `succeeded`（`modules/M09-图片反推提示词.md` §3）：`result_json` / `result_prompt` 非空，
  * 推荐值可空（越界已在 handler 归一为 `null`）。`error_code` / `error_message` 不写。
+ *
+ * `AND status = 'running'` 是竞态守卫：`JOB_TIMEOUT_SECONDS` 兜底可能已把该行落成终态，
+ * 仍在飞的 handler 返回成功时不得覆盖它（`modules/M09` §5 的状态机）。返回命中行数。
  */
 export interface MarkSucceededInput {
   id: number;
@@ -151,7 +154,7 @@ export interface MarkSucceededInput {
   finishedAt: Iso;
 }
 
-export const markSucceeded = (input: MarkSucceededInput): void => {
+export const markSucceeded = (input: MarkSucceededInput): number =>
   getDb()
     .transaction(() =>
       getDb()
@@ -159,7 +162,7 @@ export const markSucceeded = (input: MarkSucceededInput): void => {
           `UPDATE prompt_reverse_jobs SET status = 'succeeded', result_json = @resultJson,
                   result_prompt = @resultPrompt, suggest_era_code = @suggestEraCode,
                   suggest_scene_id = @suggestSceneId, finished_at = @finishedAt
-           WHERE id = @id`,
+           WHERE id = @id AND status = 'running'`,
         )
         .run({
           id: input.id,
@@ -168,9 +171,8 @@ export const markSucceeded = (input: MarkSucceededInput): void => {
           suggestEraCode: input.suggestEraCode,
           suggestSceneId: input.suggestSceneId,
           finishedAt: input.finishedAt,
-        }),
+        }).changes,
     )();
-};
 
 /** 落终态 `failed`（不可重试分支）：`attempt` 保持不变；`error_message` 存用户可见文案供排查。 */
 export const markTerminalFailure = (

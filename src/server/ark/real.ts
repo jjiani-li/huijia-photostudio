@@ -21,8 +21,8 @@ const baseUrl = (): string => process.env.ARK_BASE_URL ?? 'https://ark.cn-beijin
 /** 读图模型名（`identity_anchors.model` 与 `chat/completions` 的 `model` 取同一份，避免第二份默认值）。 */
 export const arkVisionModel = (): string =>
   process.env.ARK_VISION_MODEL ?? 'doubao-seed-2-1-turbo-260628';
-/** 读图请求的 `max_tokens`（`docs/prd/modules/M03-身份锚点提取.md` §7 的代码内常量）。 */
-export const ANCHOR_MAX_TOKENS = 1200;
+/** 读图请求的 `max_tokens`（锚点提取与反推读图共用；`docs/prd/modules/M03-身份锚点提取.md` §7 的代码内常量）。 */
+export const VISION_MAX_TOKENS = 1200;
 /** 复核 / 审核请求的 `max_tokens`（`modules/M07-生成后复核与内容审核.md` §7 的代码内常量）。 */
 export const REVIEW_MAX_TOKENS = 800;
 /** 生图模型名（`generations.model` 与 `images/generations` 的 `model` 取同一份，避免第二份默认值）。 */
@@ -87,7 +87,7 @@ export class RealArkProvider implements ArkProvider {
     // messages 组装固定为「1 段 text → N 张 image_url」（`modules/M03-身份锚点提取.md` §5.4）。
     const data = (await postJson('/chat/completions', {
       model: arkVisionModel(),
-      max_tokens: ANCHOR_MAX_TOKENS,
+      max_tokens: VISION_MAX_TOKENS,
       messages: [
         { role: 'system', content: input.systemPrompt },
         {
@@ -119,7 +119,7 @@ export class RealArkProvider implements ArkProvider {
   async reversePrompt(input: PromptReverseInput): Promise<PromptReverseResult> {
     const data = (await postJson('/chat/completions', {
       model: arkVisionModel(),
-      max_tokens: ANCHOR_MAX_TOKENS,
+      max_tokens: VISION_MAX_TOKENS,
       messages: [
         { role: 'system', content: input.systemPrompt },
         {

@@ -223,6 +223,52 @@ describe('失败处置（§4.6 自动重试，三张表同一写法）', () => {
     expect(row.attempt).toBe(0);
     expect(row.error_code).toBe('INTERNAL');
   });
+
+  it('`retryable: false` 收窄判据（§4.6：以 modules/M06 §5.8 的「可重试」列为准）→ 即使错误码在瞬时集合内也直接落 failed', () => {
+    const id = makeGeneration({ status: 'running', attempt: 0 });
+    expect(
+      settleJobFailure({
+        table: 'generations',
+        id,
+        attempt: 0,
+        produced: 0,
+        code: 'PROVIDER_ERROR',
+        rawMessage: 'ModelNotOpen',
+        retryable: false,
+      }),
+    ).toBe('failed');
+    const row = rowOf('generations', id);
+    expect(row.status).toBe('failed');
+    expect(row.attempt).toBe(0);
+    expect(row.error_code).toBe('PROVIDER_ERROR');
+    expect(row.error_message).toBe('ModelNotOpen');
+  });
+
+  it('`prompt_reverse_jobs` 的失败写入走同一入口（三张表同一写法）', () => {
+    const id = insertReverseJob({
+      userId: 1,
+      sourcePhotoId: 1,
+      model: 'vision-model',
+      status: 'running',
+      attempt: 0,
+      createdAt: nowIso(),
+    }).id;
+    expect(
+      settleJobFailure({
+        table: 'prompt_reverse_jobs',
+        id,
+        attempt: 0,
+        produced: 0,
+        code: 'PROVIDER_TIMEOUT',
+        rawMessage: '生成花的时间有点长，请重试一次',
+      }),
+    ).toBe('requeued');
+    const row = rowOf('prompt_reverse_jobs', id);
+    expect(row.status).toBe('queued');
+    expect(row.attempt).toBe(1);
+    // `error_message` 由调用方决定语义：本表写用户可见文案，不写模型原文（`modules/M09` §5.4）。
+    expect(row.error_message).toBe('生成花的时间有点长，请重试一次');
+  });
 });
 
 // ── 主循环的单格处理（stub handler 注入）──────────────────────────────────────────────

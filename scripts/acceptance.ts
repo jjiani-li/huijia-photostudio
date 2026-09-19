@@ -53,7 +53,8 @@ import { runPurge } from '../src/jobs/handlers/purge';
 import { heartbeatPath, writeHeartbeat } from '../src/jobs/heartbeat';
 import { SID_COOKIE, createSession, hashToken } from '../src/server/auth/session';
 import { promptReverseJobSchema } from '../src/shared/types';
-import { reversePromptHandler } from '../src/jobs/handlers/reversePrompt';
+import { configReverseDomain, parseReverseResponse, reversePromptHandler } from '../src/jobs/handlers/reversePrompt';
+import { markSucceeded } from '../src/server/db/repositories/promptReverseJobs';
 import { POST as postReverseJob } from '../app/api/prompt-reverse-jobs/route';
 import { GET as getReverseJob } from '../app/api/prompt-reverse-jobs/[id]/route';
 import { GET as getEraSceneConfig } from '../app/api/config/era-scene/route';
@@ -1716,11 +1717,14 @@ checks.push(
         (key) => typeof detail[key] === 'string' && (detail[key] as string).length > 0,
       );
       const promptOk = typeof job.resultPrompt === 'string' && job.resultPrompt.length > 0;
+      // 「推荐年代代号与场景 id 齐全」：两个键必须在响应里，且回放样本（E2 × S3）取到非空推荐。
+      const suggestionsGiven =
+        'suggestEraCode' in job && 'suggestSceneId' in job && typeof job.suggestEraCode === 'string' && Number.isInteger(job.suggestSceneId);
       const shapeOk = promptReverseJobSchema.safeParse(job).success;
       return {
-        ok: job.status === 'succeeded' && keysOk && allNonEmpty && promptOk && shapeOk,
-        expected: 'succeeded；五键非空 + resultPrompt 非空 + 形状走 shared schema',
-        actual: `status=${String(job.status)} 键=[${Object.keys(detail).sort().join(',')}] 全非空=${allNonEmpty} prompt=${promptOk} schema=${shapeOk}`,
+        ok: job.status === 'succeeded' && keysOk && allNonEmpty && promptOk && suggestionsGiven && shapeOk,
+        expected: 'succeeded；五键非空 + resultPrompt 非空 + 推荐年代 / 场景齐全 + 形状走 shared schema',
+        actual: `status=${String(job.status)} 键=[${Object.keys(detail).sort().join(',')}] 全非空=${allNonEmpty} prompt=${promptOk} 推荐=${String(job.suggestEraCode)}/${String(job.suggestSceneId)} schema=${shapeOk}`,
       };
     },
   },
@@ -1728,8 +1732,7 @@ checks.push(
     id: 'REV-02',
     run: async () => {
       const job = await runReverseOnce();
-      const jobId = job.id as number;
-      const row = reverseRow(jobId);
+      const row = reverseRow(job.id as number);
       const era = row.suggest_era_code as string | null;
       const scene = row.suggest_scene_id as number | null;
 
@@ -1739,10 +1742,44 @@ checks.push(
       const sceneInTable =
         scene === null || getDb().prepare('SELECT 1 FROM scenes WHERE id = ?').get(scene) !== undefined;
 
+      // 「越界由实现置 NULL、不判失败」：直接把越界 / 类型不符的推荐值喂给解析与落库（回放样本恒为合法值，
+      // 走不了这条分支），该行仍须是 `succeeded` 且两列为 NULL。
+      const outOfRangeId = (
+        await enqueueReverse(await makePreprocessedWithFile())
+      );
+      getDb().prepare("UPDATE prompt_reverse_jobs SET status = 'running' WHERE id = ?").run(outOfRangeId);
+      const parsed = parseReverseResponse(
+        JSON.stringify({
+          scene: '室内堂屋',
+          lighting: '左侧窗户斜射的自然光，色温偏冷',
+          era: '约在二十世纪八十年代，黑白胶片',
+          wardrobe: '深色中山装，短寸发型',
+          composition: '中景，人物居中略偏左',
+          result_prompt: '黑白老照片质感，室内堂屋正面机位',
+          suggest_era_code: 'E99',
+          suggest_scene_id: '3',
+        }),
+        configReverseDomain,
+      );
+      let outOfRangeOk = false;
+      if (parsed.ok) {
+        markSucceeded({
+          id: outOfRangeId,
+          result: parsed.result,
+          resultPrompt: parsed.resultPrompt,
+          suggestEraCode: parsed.suggestEraCode,
+          suggestSceneId: parsed.suggestSceneId,
+          finishedAt: nowIso(),
+        });
+        const outRow = reverseRow(outOfRangeId);
+        outOfRangeOk = outRow.status === 'succeeded' && outRow.suggest_era_code === null && outRow.suggest_scene_id === null;
+      }
+
       return {
-        ok: eraOk && eraInTable && sceneOk && sceneInTable,
-        expected: 'suggest_era_code ∈ {E1..E4}∪{NULL}；suggest_scene_id 为 INTEGER∪{NULL} 且落在 scenes.id',
-        actual: `era=${String(era)}（在 eras=${eraInTable}） scene=${String(scene)}（在 scenes=${sceneInTable}）`,
+        ok: eraOk && eraInTable && sceneOk && sceneInTable && outOfRangeOk,
+        expected:
+          'suggest_era_code ∈ {E1..E4}∪{NULL} 且落在 eras.code；suggest_scene_id 为 INTEGER∪{NULL} 且落在 scenes.id；越界置 NULL 仍 succeeded',
+        actual: `era=${String(era)}（在 eras=${eraInTable}） scene=${String(scene)}（在 scenes=${sceneInTable}） 越界置 NULL 仍 succeeded=${outOfRangeOk}`,
       };
     },
   },
@@ -1782,6 +1819,10 @@ checks.push(
         typeof succeededRow.result_json === 'string' &&
         typeof succeededRow.result_prompt === 'string' &&
         succeededRow.finished_at !== null &&
+        // 「产物与状态可查」：`GET` 也必须能看到 succeeded 与两个产物字段
+        succeededDto.job.status === 'succeeded' &&
+        succeededDto.job.resultJson !== null &&
+        typeof succeededDto.job.resultPrompt === 'string' &&
         failedRow.status === 'failed' &&
         failedRow.error_code === 'INTERNAL' &&
         typeof failedRow.error_message === 'string' &&
@@ -1793,8 +1834,9 @@ checks.push(
 
       return {
         ok,
-        expected: 'queued → succeeded（产物可查）；另起一行 queued → failed（error_code / error_message 非空）；重复反推插新行',
-        actual: `ids=${first}/${second} queued=${String(queuedRow.status)}→决定 succeeded=${String(succeededRow.status)} 产物=${typeof succeededRow.result_json}/${typeof succeededRow.result_prompt} failed=${String(failedRow.status)}/${String(failedRow.error_code)} 新行未动=${String(secondQueued.status)}`,
+        expected:
+          'queued → succeeded（`GET` 可见产物与状态）；另起一行 queued → failed（error_code / error_message 非空）；重复反推插新行',
+        actual: `ids=${first}/${second} queued=${String(queuedRow.status)}→succeeded=${String(succeededRow.status)}（GET ${String(succeededDto.job.status)}） 产物=${typeof succeededRow.result_json}/${typeof succeededRow.result_prompt} failed=${String(failedRow.status)}/${String(failedRow.error_code)} 新行未动=${String(secondQueued.status)}`,
       };
     },
   },

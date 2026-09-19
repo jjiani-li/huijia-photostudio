@@ -16,13 +16,14 @@ import {
 } from '../../server/db/repositories/promptReverseJobs';
 import { nowIso } from '../../server/domain/time';
 import { readPromptReverseFixture } from '../../server/ark/fixtures';
+import { ArkUpstreamError } from '../../server/ark/errors';
 import type { PromptReverseResult } from '../../server/ark/types';
 import { promptReverseDetailSchema } from '../../shared/types';
 import { stripFence } from './anchorExtract';
 import {
+  failTimedOutReverseJob,
   parseReverseResponse,
   reversePromptHandler,
-  settleReverseFailure,
   type ReverseDomain,
 } from './reversePrompt';
 
@@ -289,28 +290,32 @@ describe('§5 · handler 状态机与落库', () => {
 });
 
 describe('§4.6 · 失败处置与超时兜底', () => {
-  it('不可重试的上游错误（ModelNotOpen 落 PROVIDER_ERROR 但标 ❌）直接落 failed', () => {
-    const jobId = queuedJob(1);
-    const outcome = settleReverseFailure(
-      { id: jobId, attempt: 0 },
-      { code: 'PROVIDER_ERROR', retryable: false, raw: 'ModelNotOpen' },
+  it('不可重试的上游错误（ModelNotOpen 落 PROVIDER_ERROR 但标 ❌）直接落 failed', async () => {
+    const jobId = queuedJob(await seedPhoto());
+    arkStub.reversePrompt.mockRejectedValue(
+      new ArkUpstreamError({ kind: 'http', errorCode: 'ModelNotOpen', message: '模型未开通' }),
     );
-    expect(outcome).toBe('failed');
-    expect(findById(jobId)?.status).toBe('failed');
+
+    await run(jobId);
+
+    const row = findById(jobId);
+    expect(row?.status).toBe('failed');
+    expect(row?.attempt).toBe(0);
+    expect(row?.errorCode).toBe('PROVIDER_ERROR');
   });
 
-  it('可重试但 attempt 已用掉 → 落 failed（attempt 不变）', () => {
-    const jobId = queuedJob(1, 1, 1);
-    const outcome = settleReverseFailure(
-      { id: jobId, attempt: 1 },
-      { code: 'PROVIDER_TIMEOUT', retryable: true, raw: 'timeout' },
-    );
-    expect(outcome).toBe('failed');
-    expect(findById(jobId)?.attempt).toBe(1);
+  it('可重试但 attempt 已用掉 → 落 failed（attempt 不变）', async () => {
+    const jobId = queuedJob(await seedPhoto(), 1, 1);
+    arkStub.reversePrompt.mockResolvedValue(resultOf('不是 JSON'));
+
+    await run(jobId);
+
+    const row = findById(jobId);
+    expect(row?.status).toBe('failed');
+    expect(row?.attempt).toBe(1);
   });
 
-  it('超时兜底只对仍 running 的行生效', async () => {
-    const { failTimedOutReverseJob } = await import('./reversePrompt');
+  it('超时兜底只对仍 running 的行生效', () => {
     const jobId = queuedJob(1);
     markTerminalFailure(jobId, 'INTERNAL', '已落终态', nowIso());
 
@@ -319,6 +324,18 @@ describe('§4.6 · 失败处置与超时兜底', () => {
     const row = findById(jobId);
     expect(row?.status).toBe('failed');
     expect(row?.errorCode).toBe('INTERNAL');
+  });
+
+  it('超时兜底：running 行按 PROVIDER_TIMEOUT 回 queued（attempt + 1）', () => {
+    const jobId = queuedJob(1);
+    getDb().prepare("UPDATE prompt_reverse_jobs SET status = 'running' WHERE id = ?").run(jobId);
+
+    failTimedOutReverseJob(jobId);
+
+    const row = findById(jobId);
+    expect(row?.status).toBe('queued');
+    expect(row?.attempt).toBe(1);
+    expect(row?.errorCode).toBe('PROVIDER_TIMEOUT');
   });
 });
 
