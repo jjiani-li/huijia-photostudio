@@ -4,7 +4,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { NextRequest } from 'next/server';
-import { photoSchema } from '../../../src/shared/types';
+import { photoSchema, qualitySchema } from '../../../src/shared/types';
 import { closeDb } from '../../../src/server/db/connection';
 import { runMigrations } from '../../../src/server/db/migrate';
 import { runSeed } from '../../../src/server/db/seed';
@@ -14,6 +14,7 @@ import { nowIso } from '../../../src/server/domain/time';
 import { POST } from './route';
 import { DELETE } from './[id]/route';
 import { GET } from './[id]/file/route';
+import { POST as PREPROC } from './[id]/preprocess/route';
 
 /**
  * 端点层断言：`API-02`（响应形状走 `src/shared/types.ts` 的 zod schema）、
@@ -181,5 +182,56 @@ describe('响应头与删除幂等', () => {
     });
     const second = await DELETE(asReq(new Request('http://localhost/x', { method: 'DELETE' })), ctx({ id: String(photo.id) }));
     expect(second.status).toBe(200);
+  });
+});
+
+describe('POST /api/photos/:id/preprocess', () => {
+  it('200 { photo, quality }，quality 通过 shared 的 qualitySchema；重复调用复用同一行', async () => {
+    const photo = photoSchema.parse(
+      ((await (await upload(await jpeg(800, 600))).json()) as { photo: unknown }).photo,
+    );
+    const first = await PREPROC(
+      asReq(new Request('http://localhost/x', { method: 'POST' })),
+      ctx({ id: String(photo.id) }),
+    );
+    expect(first.status).toBe(200);
+    const body = (await first.json()) as { photo: unknown; quality: unknown };
+    const quality = qualitySchema.parse(body.quality);
+    expect(Object.keys(quality)).toEqual([
+      'usable',
+      'faceDetected',
+      'faceCount',
+      'sharpness',
+      'readability',
+      'damageLevel',
+      'warnings',
+      'advice',
+    ]);
+    const preprocessed = photoSchema.parse(body.photo);
+    expect(preprocessed.kind).toBe('preprocessed');
+    expect(preprocessed.url).toBe(`/api/photos/${preprocessed.id}/file`);
+
+    const second = await PREPROC(
+      asReq(new Request('http://localhost/x', { method: 'POST' })),
+      ctx({ id: String(photo.id) }),
+    );
+    expect(((await second.json()) as { photo: { id: number } }).photo.id).toBe(preprocessed.id);
+  });
+
+  it('kind != original（preprocessed 自身）→ 400 INVALID_PARAM', async () => {
+    const photo = photoSchema.parse(
+      ((await (await upload(await jpeg(700, 500))).json()) as { photo: unknown }).photo,
+    );
+    const pre = photoSchema.parse(
+      ((await (
+        await PREPROC(asReq(new Request('http://localhost/x', { method: 'POST' })), ctx({ id: String(photo.id) }))
+      ).json()) as { photo: unknown }).photo,
+    );
+    const res = await PREPROC(
+      asReq(new Request('http://localhost/x', { method: 'POST' })),
+      ctx({ id: String(pre.id) }),
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('INVALID_PARAM');
   });
 });
