@@ -18,20 +18,23 @@ const request = (over: Partial<ArkImageRequest> = {}): ArkImageRequest => ({
 });
 
 describe('MockArkProvider.extractAnchor', () => {
+  const parsed = (r: { raw: string }): { anchor: string; features: Record<string, string> } =>
+    JSON.parse(r.raw) as { anchor: string; features: Record<string, string> };
+
   it('同一输入稳定（年龄按输入替换、features 恰 12 键）', async () => {
     const provider = new MockArkProvider();
     const input = { images: [{ mime: 'image/jpeg', base64: 'AAA' }], systemPrompt: 'sys' };
-    const first = await provider.extractAnchor(input);
-    const second = await provider.extractAnchor(input);
-    expect(first.anchorText).toBe(second.anchorText);
+    const first = parsed(await provider.extractAnchor(input));
+    const second = parsed(await provider.extractAnchor(input));
+    expect(first.anchor).toBe(second.anchor);
     expect(first.features.ageRange).toBe(second.features.ageRange);
     expect(Object.keys(first.features)).toHaveLength(12);
   });
 
   it('不同输入得到不同年龄（伪随机、非固定）', async () => {
     const provider = new MockArkProvider();
-    const a = await provider.extractAnchor({ images: [{ mime: 'image/jpeg', base64: 'AAA' }], systemPrompt: 's' });
-    const b = await provider.extractAnchor({ images: [{ mime: 'image/jpeg', base64: 'BBB' }], systemPrompt: 's' });
+    const a = parsed(await provider.extractAnchor({ images: [{ mime: 'image/jpeg', base64: 'AAA' }], systemPrompt: 's' }));
+    const b = parsed(await provider.extractAnchor({ images: [{ mime: 'image/jpeg', base64: 'BBB' }], systemPrompt: 's' }));
     expect(a.features.ageRange).not.toBe(b.features.ageRange);
   });
 });

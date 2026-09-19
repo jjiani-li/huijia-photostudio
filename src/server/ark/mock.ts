@@ -58,7 +58,8 @@ export class MockArkProvider implements ArkProvider {
     const age = AGE_MIN + (seed % AGE_SPAN);
     const features: AnchorFeatures = { ...fixture.features, ageRange: `${age - 4}-${age + 4}` };
     const anchorText = fixture.anchorText.replace(/\d+\s*岁/, `${age} 岁`);
-    return { anchorText, features, model: fixture.model };
+    // DTO 只回正文原文（`AnchorExtractResult.raw`）：容错解析与 12 键校验归 handler（`modules/M03` §5.5）。
+    return { raw: JSON.stringify({ anchor: anchorText, features }), model: fixture.model };
   }
 
   async generateImage(request: ArkImageRequest): Promise<ArkImageResult> {

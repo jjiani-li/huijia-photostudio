@@ -67,10 +67,8 @@ const anchorResponseSchema = z.object({
  * §5.5 的六步容错解析，**按顺序执行、任一步失败都返回失败**（调用方一律落 `PROVIDER_ERROR`）：
  * 剥包裹 → 反序列化 → zod 12 键 → 长度 60–120 字符 → 否定词拦截 → 美化词拦截。
  *
- * 输入是「上游正文原文」。本项目的 `ArkProvider.extractAnchor` DTO 已把正文解析成
- * `{ anchorText, features, model }`（形状由 `tickets/T05` 冻结，见 `src/server/ark/types.ts`），
- * 因此 handler 把它还原成文档约定的 `{"anchor","features"}` 正文再交给本函数——
- * 六步逻辑只有这一份，且每一步都可被单元测试直接覆盖。
+ * 输入是「上游正文原文」`AnchorExtractResult.raw`（`modules/M03-身份锚点提取.md` §5.3 步骤 4）；
+ * provider（real / mock）只负责取回正文，六步逻辑只有这一份、且每一步都可被单元测试直接覆盖。
  */
 export const parseAnchorResponse = (raw: string): AnchorParse => {
   // ① 剥包裹
@@ -157,8 +155,6 @@ const resolveImages = async (userId: number, anchor: AnchorRecord): Promise<Phot
 /** 异常 → 落库用的错误码；上游错误走 `mapArkError` 的唯一映射入口。 */
 const toFailure = (err: unknown): { code: ErrorCode; raw: string } => {
   if (err instanceof AppError) return { code: err.code, raw: err.message };
-  // real provider 直接 `JSON.parse(content)`，正文不是 JSON 时抛 SyntaxError（§5.5 第 2 步 → PROVIDER_ERROR）。
-  if (err instanceof SyntaxError) return { code: 'PROVIDER_ERROR', raw: err.message };
   const mapped = mapArkError(err);
   return { code: mapped.code, raw: mapped.raw };
 };
@@ -245,15 +241,14 @@ export const anchorExtractHandler = async (job: AnchorExtractJob): Promise<void>
       })),
     );
 
-    // ⑤ 调用读图 + 六步容错解析。
+    // ⑤ 调用读图 + 六步容错解析。provider 只回正文原文，解析全在本处（§5.3 步骤 4、§5.5）。
     const result = await getArk().extractAnchor({ images, systemPrompt });
-    const raw = JSON.stringify({ anchor: result.anchorText, features: result.features });
-    const parsed = parseAnchorResponse(raw);
+    const parsed = parseAnchorResponse(result.raw);
     if (!parsed.ok) {
       log('warn', 'anchor 解析不合格', {
         anchorId: anchor.id,
         reason: parsed.reason,
-        content: raw.slice(0, CONTENT_LOG_LIMIT),
+        content: result.raw.slice(0, CONTENT_LOG_LIMIT),
       });
       fail('PROVIDER_ERROR', quality);
       return;
@@ -265,7 +260,8 @@ export const anchorExtractHandler = async (job: AnchorExtractJob): Promise<void>
       anchorText: parsed.anchorText,
       features: parsed.features,
       quality,
-      preprocessedPhotoId: photos[0]?.id ?? anchor.preprocessedPhotoId,
+      // 主图在创建行时已选定，本处不覆写用户传入的 `preprocessed_photo_id`（`modules/M03` §3）。
+      preprocessedPhotoId: anchor.preprocessedPhotoId,
       finishedAt: nowIso(),
     });
     log('info', 'done', {

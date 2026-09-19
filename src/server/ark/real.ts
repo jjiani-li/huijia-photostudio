@@ -1,4 +1,3 @@
-import type { AnchorFeatures } from '../../shared/types';
 import { ArkUpstreamError } from './errors';
 import type {
   AnchorExtractInput,
@@ -16,6 +15,8 @@ const baseUrl = (): string => process.env.ARK_BASE_URL ?? 'https://ark.cn-beijin
 /** 读图模型名（`identity_anchors.model` 与 `chat/completions` 的 `model` 取同一份，避免第二份默认值）。 */
 export const arkVisionModel = (): string =>
   process.env.ARK_VISION_MODEL ?? 'doubao-seed-2-1-turbo-260628';
+/** 读图请求的 `max_tokens`（`docs/prd/modules/M03-身份锚点提取.md` §7 的代码内常量）。 */
+export const ANCHOR_MAX_TOKENS = 1200;
 const imageModel = (): string => process.env.ARK_IMAGE_MODEL ?? 'doubao-seedream-5-0-lite-260128';
 const timeoutMs = (): number => Number(process.env.ARK_TIMEOUT_SECONDS ?? 120) * 1000;
 
@@ -73,7 +74,7 @@ export class RealArkProvider implements ArkProvider {
     // messages 组装固定为「1 段 text → N 张 image_url」（`modules/M03-身份锚点提取.md` §5.4）。
     const data = (await postJson('/chat/completions', {
       model: arkVisionModel(),
-      max_tokens: 1200,
+      max_tokens: ANCHOR_MAX_TOKENS,
       messages: [
         { role: 'system', content: input.systemPrompt },
         {
@@ -93,19 +94,8 @@ export class RealArkProvider implements ArkProvider {
     if (typeof content !== 'string') {
       throw new ArkUpstreamError({ kind: 'http', errorCode: 'EmptyData', message: 'chat/completions 未返回 content' });
     }
-    // reasoning_content 一律丢弃；只解析 content。`anchor` 是 prompt（§5.1）的输出键，`anchorText` 是历史 fixture 形状。
-    let parsed: { anchor?: string; anchorText?: string; features?: AnchorFeatures };
-    try {
-      parsed = JSON.parse(content) as typeof parsed;
-    } catch {
-      // §5.5 第 2 步失败即 `PROVIDER_ERROR`（`errors.ts` 把 `EmptyData` 映射为可重试的 `PROVIDER_ERROR`）。
-      throw new ArkUpstreamError({ kind: 'http', errorCode: 'EmptyData', message: 'content 不是合法 JSON' });
-    }
-    const anchorText = parsed.anchor ?? parsed.anchorText;
-    if (typeof anchorText !== 'string' || parsed.features === undefined) {
-      throw new ArkUpstreamError({ kind: 'http', errorCode: 'EmptyData', message: 'content 不是合法的锚点 JSON' });
-    }
-    return { anchorText, features: parsed.features, model: arkVisionModel() };
+    // reasoning_content 一律丢弃；正文原文原样返回，六步容错解析归 handler（`modules/M03` §5.3 步骤 4、§5.5）。
+    return { raw: content, model: arkVisionModel() };
   }
 
   async generateImage(request: ArkImageRequest): Promise<ArkImageResult> {

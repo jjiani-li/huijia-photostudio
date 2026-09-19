@@ -226,23 +226,6 @@ export const findNextQueuedId = (): number | null => {
   return row === undefined ? null : row.id;
 };
 
-/**
- * 启动回收（`spec/04` §4.6 的「启动时回收」）：`running` 且 `started_at` 早于阈值的行置回 `queued`、
- * `started_at = NULL`；`attempt` 与 `error_code` 都不动。返回回收行数。
- */
-export const resetStaleRunning = (staleBefore: Iso): number => {
-  const db = getDb();
-  return db.transaction(
-    () =>
-      db
-        .prepare(
-          `UPDATE identity_anchors SET status = 'queued', started_at = NULL
-           WHERE status = 'running' AND started_at IS NOT NULL AND started_at < @staleBefore`,
-        )
-        .run({ staleBefore }).changes,
-  )();
-};
-
 /** 强制确认节点：仅 0→1 落值，重复确认不改 `confirmed_at`（`docs/prd/modules/M04-身份确认与授权.md` §5.1 ⑥）。 */
 export const markConfirmed = (id: number, confirmedAt: Iso): void => {
   getDb()

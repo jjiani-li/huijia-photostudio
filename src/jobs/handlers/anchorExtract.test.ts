@@ -59,11 +59,9 @@ const GOOD: Quality = {
   advice: null,
 };
 
-const result = (over: Partial<AnchorExtractResult> = {}): AnchorExtractResult => ({
-  anchorText: fixture.anchorText,
-  features: fixture.features,
+const result = (over: Partial<{ anchorText: string; features: AnchorFeatures }> = {}): AnchorExtractResult => ({
+  raw: JSON.stringify({ anchor: over.anchorText ?? fixture.anchorText, features: over.features ?? fixture.features }),
   model: fixture.model,
-  ...over,
 });
 
 let tmpDir: string;
@@ -266,7 +264,7 @@ describe('§5.3 · handler 状态机', () => {
   it('空串 / 缺键 / 长度越界 / 词表命中 → failed + PROVIDER_ERROR，不写 anchor_text', async () => {
     const { ageRange, ...missing } = fixture.features;
     void ageRange;
-    const cases: Array<Partial<AnchorExtractResult>> = [
+    const cases: Array<Partial<{ anchorText: string; features: AnchorFeatures }>> = [
       { anchorText: '' },
       { features: missing as unknown as AnchorFeatures },
       { anchorText: textOf(ANCHOR_MIN_LENGTH - 1) },
@@ -469,7 +467,7 @@ describe('§5.4 · messages 组装（RealArkProvider，N=5）', () => {
     global.fetch = fetchMock as unknown as typeof fetch;
     try {
       const extracted = await new RealArkProvider().extractAnchor({ images, systemPrompt: 'sys' });
-      expect(extracted.anchorText).toBe(fixture.anchorText);
+      expect(JSON.parse(extracted.raw)).toMatchObject({ anchor: fixture.anchorText });
     } finally {
       global.fetch = originalFetch;
     }

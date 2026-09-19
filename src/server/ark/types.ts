@@ -1,5 +1,3 @@
-import type { AnchorFeatures } from '../../shared/types';
-
 /**
  * `ArkProvider` 抽象与 DTO（`docs/prd/modules/M03-身份锚点提取.md` §5.4、
  * `modules/M06-生成编排.md` §5.8–§5.9）。业务代码只依赖本接口，**不得直接 `fetch`**。
@@ -18,8 +16,13 @@ export interface AnchorExtractInput {
 }
 
 export interface AnchorExtractResult {
-  anchorText: string;
-  features: AnchorFeatures;
+  /**
+   * 上游助手正文原文（`choices[0].message.content`），**未解析**。
+   * 容错解析（剥包裹 / JSON.parse / 12 键 / 长度 / 词表）一律由
+   * `jobs/handlers/anchorExtract.ts` 的 `parseAnchorResponse` 按 `modules/M03` §5.5 执行，
+   * provider 只负责取回正文、不做校验（`modules/M03-身份锚点提取.md` §5.3 步骤 4）。
+   */
+  raw: string;
   model: string;
 }
 
