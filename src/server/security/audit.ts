@@ -1,8 +1,8 @@
 import {
   write as writeAuditRow,
   type AuditRecord,
-  type WriteAuditInput,
 } from '../db/repositories/audit';
+import type { Iso } from '../../shared/types';
 
 /**
  * 审计写入的领域层入口（`docs/prd/spec/04-技术基线与目录结构.md` §2 的 `src/server/security/audit`）。
@@ -27,8 +27,26 @@ export type AuditAction =
   | 'anchor.delete'
   | 'photo.purge';
 
-export interface WriteAuditFields extends Omit<WriteAuditInput, 'action'> {
+export interface AuditEntry {
+  /** 匿名操作（发码前）为 `null`。 */
+  userId: number | null;
   action: AuditAction;
+  /** `'anchor:3'` / `'photo:12'` / `'generation:7'`。 */
+  target?: string | null;
+  /** 只放 id / `attempt` / `scope` / 级联计数等原子值（`modules/M04` §9）。 */
+  meta?: Record<string, unknown> | null;
 }
 
-export const writeAudit = (input: WriteAuditFields): AuditRecord => writeAuditRow(input);
+/**
+ * 审计写入的**唯一业务入口**（`docs/prd/modules/M04-身份确认与授权.md` §9）。
+ * **必须在调用方已开启的事务内调用**；写入失败不回吞（抛出异常让整个事务回滚）。
+ * 传 `at` 时用于让 `audit_logs.created_at` 与同事务内业务写入的时间戳**逐字符相等**（§5.1 ④）。
+ */
+export const audit = (entry: AuditEntry, at?: Iso): AuditRecord =>
+  writeAuditRow({
+    action: entry.action,
+    userId: entry.userId,
+    target: entry.target,
+    meta: entry.meta,
+    createdAt: at,
+  });

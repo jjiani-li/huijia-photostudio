@@ -10,6 +10,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getDb } from '../src/server/db/connection';
+import { hardDeleteAnchor, insert as insertAnchor } from '../src/server/db/repositories/anchors';
+import { confirmAnchor, revokeConsents } from '../src/server/domain/anchorService';
+import { assertAnchorGeneratable } from '../src/server/domain/generationService';
+import { AppError } from '../src/server/domain/errors';
+import { nowIso } from '../src/server/domain/time';
 
 interface CheckResult {
   ok: boolean;
@@ -150,6 +155,125 @@ const checks: Check[] = [
 
 /** 自带清理：跑完删除本次创建的行与磁盘文件（依据一次运行内记录的 id 列表，§3）。 */
 const cleanups: Array<() => void> = [];
+
+// —— `tickets/T07` 的合规拒绝路径（`modules/M04-身份确认与授权.md` §8.2）——
+// `SEC-01` / `SEC-02` / `SEC-03` / `SEC-09` 全部进程内直连 domain 层（确认 / 授权 / 守卫），不需 HTTP；
+// `POST /api/generations` 落成后（`tickets/T09`），`SEC-01` / `SEC-03` 再转成端到端形态。
+const DEV_USER = 1;
+const ANCHOR_TEXT = '甲'.repeat(60);
+const ANCHOR_FEATURES = {
+  gender: '男',
+  ageRange: '70-80岁',
+  hair: '灰白短寸',
+  faceShape: '方圆脸',
+  forehead: '宽阔',
+  eyebrows: '稀疏',
+  eyes: '单眼皮',
+  nose: '鼻头圆润',
+  mouth: '薄唇',
+  skin: '偏黄',
+  distinctive: '无',
+  build: '瘦高',
+};
+
+/** 执行一个应抛错的调用，返回错误码（`AppError.code`）或 `'NO_THROW'`。 */
+const codeOfThrow = (fn: () => void): string => {
+  try {
+    fn();
+    return 'NO_THROW';
+  } catch (err) {
+    return err instanceof AppError ? err.code : `ERROR:${String(err)}`;
+  }
+};
+
+/** 建一个 `succeeded` 锚点（含 `anchor_text` / `features_json`）并登记清理。 */
+const makeSucceededAnchor = (): number => {
+  const id = insertAnchor({
+    userId: DEV_USER,
+    inputPhotoIds: [1],
+    preprocessedPhotoId: null,
+    status: 'succeeded',
+    attempt: 0,
+    model: 'mock-model',
+    promptVersion: 'anchor-v1',
+    quality: null,
+    createdAt: nowIso(),
+  }).id;
+  getDb()
+    .prepare('UPDATE identity_anchors SET anchor_text = ?, features_json = ?, finished_at = ? WHERE id = ?')
+    .run(ANCHOR_TEXT, JSON.stringify(ANCHOR_FEATURES), nowIso(), id);
+  cleanups.push(() => {
+    getDb().prepare('DELETE FROM consents WHERE anchor_id = ?').run(id);
+    getDb().prepare('DELETE FROM audit_logs WHERE target = ?').run(`anchor:${id}`);
+    hardDeleteAnchor(id, DEV_USER);
+  });
+  return id;
+};
+
+checks.push(
+  {
+    id: 'SEC-01',
+    run: () => {
+      const id = makeSucceededAnchor(); // `confirmed_by_user` 默认 0
+      const code = codeOfThrow(() => assertAnchorGeneratable(DEV_USER, id));
+      return { ok: code === 'ANCHOR_NOT_CONFIRMED', expected: 'ANCHOR_NOT_CONFIRMED', actual: code };
+    },
+  },
+  {
+    id: 'SEC-02',
+    run: () => {
+      const id = makeSucceededAnchor();
+      const code = codeOfThrow(() => confirmAnchor(DEV_USER, id, ['photo_usage']));
+      const confirmed = (
+        getDb().prepare('SELECT confirmed_by_user FROM identity_anchors WHERE id = ?').get(id) as {
+          confirmed_by_user: number;
+        }
+      ).confirmed_by_user;
+      const consents = (
+        getDb().prepare('SELECT COUNT(*) AS n FROM consents WHERE anchor_id = ?').get(id) as { n: number }
+      ).n;
+      return {
+        ok: code === 'INVALID_PARAM' && confirmed === 0 && consents === 0,
+        expected: 'INVALID_PARAM 且 confirmed_by_user=0 / consents=0',
+        actual: `${code} confirmed=${confirmed} consents=${consents}`,
+      };
+    },
+  },
+  {
+    id: 'SEC-03',
+    run: () => {
+      const id = makeSucceededAnchor();
+      confirmAnchor(DEV_USER, id, ['photo_usage', 'family_agreement']);
+      revokeConsents(DEV_USER, 'photo_usage');
+      const code = codeOfThrow(() => assertAnchorGeneratable(DEV_USER, id));
+      return { ok: code === 'CONSENT_REQUIRED', expected: 'CONSENT_REQUIRED', actual: code };
+    },
+  },
+  {
+    id: 'SEC-09',
+    run: () => {
+      const id = makeSucceededAnchor();
+      confirmAnchor(DEV_USER, id, ['photo_usage', 'family_agreement']);
+      const audit = (
+        getDb()
+          .prepare(
+            "SELECT COUNT(*) AS n FROM audit_logs WHERE action IN ('anchor.confirm','consent.agree') AND target = ?",
+          )
+          .get(`anchor:${id}`) as { n: number }
+      ).n;
+      const consents = (
+        getDb()
+          .prepare('SELECT COUNT(*) AS n FROM consents WHERE anchor_id = ? AND revoked_at IS NULL')
+          .get(id) as { n: number }
+      ).n;
+      return {
+        ok: audit === 2 && consents === 2,
+        expected: '2 条审计 + 2 行有效 consents',
+        actual: `audit=${audit} consents=${consents}`,
+      };
+    },
+  },
+);
 
 const main = (): void => {
   // `spec/07-验收标准.md` §2 前置：mock provider（未显式设置时默认 mock，避免 Windows 下 shell 前缀不通用）。

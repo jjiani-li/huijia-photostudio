@@ -5,7 +5,7 @@ import { AppError, appError } from './errors';
 import { nowIso } from './time';
 import { buildKey, getStorage, type ImageExt } from '../storage';
 import { probeImage } from '../images/probe';
-import { writeAudit } from '../security/audit';
+import { audit } from '../security/audit';
 import { moderateUpload } from '../security/moderation';
 import {
   findActiveOriginalBySha256,
@@ -87,21 +87,25 @@ export const uploadPhoto = async (params: { userId: number; file: UploadFile }):
       const v = moderateUpload({ userId, photoId: existing.id, now: createdAt });
       if (v === 'reject') {
         softDeletePhoto(existing.id, createdAt);
-        writeAudit({
-          action: 'moderation.reject',
+        audit(
+          {
+            action: 'moderation.reject',
+            userId,
+            target: `photo:${existing.id}`,
+            meta: { stage: 'upload', targetId: existing.id, reason: null },
+          },
+          createdAt,
+        );
+      }
+      audit(
+        {
+          action: 'photo.upload',
           userId,
           target: `photo:${existing.id}`,
-          meta: { stage: 'upload', targetId: existing.id, reason: null },
-          createdAt,
-        });
-      }
-      writeAudit({
-        action: 'photo.upload',
-        userId,
-        target: `photo:${existing.id}`,
-        meta: { mime: existing.mime, bytes: existing.bytes, sha256, deduped: true },
+          meta: { mime: existing.mime, bytes: existing.bytes, sha256, deduped: true },
+        },
         createdAt,
-      });
+      );
       return v;
     })();
     if (dedupVerdict === 'reject') throw appError('CONTENT_REJECTED');
@@ -138,24 +142,28 @@ export const uploadPhoto = async (params: { userId: number; file: UploadFile }):
         qualityJson: null,
         createdAt,
       });
-      writeAudit({
-        action: 'photo.upload',
-        userId,
-        target: `photo:${inserted.id}`,
-        meta: { mime: inserted.mime, bytes: inserted.bytes, sha256, deduped: false },
+      audit(
+        {
+          action: 'photo.upload',
+          userId,
+          target: `photo:${inserted.id}`,
+          meta: { mime: inserted.mime, bytes: inserted.bytes, sha256, deduped: false },
+        },
         createdAt,
-      });
+      );
       const v = moderateUpload({ userId, photoId: inserted.id, now: createdAt });
       if (v === 'reject') {
         // 内容审核是阻断式的：同一事务内立即软删（磁盘文件由 runPurge() 清理）并记审计。
         softDeletePhoto(inserted.id, createdAt);
-        writeAudit({
-          action: 'moderation.reject',
-          userId,
-          target: `photo:${inserted.id}`,
-          meta: { stage: 'upload', targetId: inserted.id, reason: null },
+        audit(
+          {
+            action: 'moderation.reject',
+            userId,
+            target: `photo:${inserted.id}`,
+            meta: { stage: 'upload', targetId: inserted.id, reason: null },
+          },
           createdAt,
-        });
+        );
       }
       return { photo: inserted, verdict: v };
     })());
@@ -208,12 +216,14 @@ export const deletePhoto = (params: {
     if (photo.deletedAt !== null) return { ok: true as const, cascaded: ZERO_CASCADE };
     const deletedAt: Iso = nowIso();
     softDeletePhoto(photo.id, deletedAt);
-    writeAudit({
-      action: 'photo.delete',
-      userId: params.userId,
-      target: `photo:${photo.id}`,
-      createdAt: deletedAt,
-    });
+    audit(
+      {
+        action: 'photo.delete',
+        userId: params.userId,
+        target: `photo:${photo.id}`,
+      },
+      deletedAt,
+    );
     return { ok: true as const, cascaded: ZERO_CASCADE };
   })();
 };

@@ -1,5 +1,16 @@
 import { z } from 'zod';
 import { AppError, ERROR_MESSAGE, ERROR_STATUS } from '../domain/errors';
+import { consentScopeSchema } from '../../shared/types';
+
+/**
+ * `POST /api/anchors/:id/confirm` 的请求体（`docs/prd/modules/M04-身份确认与授权.md` §4、§10）：
+ * `confirmed` 必须为字面量 `true`；`consents` 的**完整性**（两项齐全）由 `confirmAnchor`
+ * 在领域层校验，以便回 `details.fields.consents` 列出缺失项。
+ */
+export const confirmAnchorSchema = z.object({
+  confirmed: z.literal(true),
+  consents: z.array(consentScopeSchema),
+});
 
 /** zod 的字段错误展开为 `details.fields`（`docs/prd/spec/03-接口契约.md` §1.3：前端只依赖这一个 details 形状）。 */
 export const zodFields = (err: z.ZodError): Record<string, string[]> => {

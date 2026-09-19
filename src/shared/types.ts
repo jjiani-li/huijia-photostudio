@@ -147,6 +147,15 @@ export const qualitySchema = z.object({
 export const moderationVerdictSchema = z.enum(['pass', 'review', 'reject']);
 
 /**
+ * 两项授权范围（`docs/prd/modules/M04-身份确认与授权.md` §5.1）；
+ * 与 `docs/prd/spec/01-领域模型与数据库.md` §3.11 的 `consents.scope` 取值一致。
+ * 顺序即文案顺序（§10），缺任一项 → `400 INVALID_PARAM`。
+ */
+export const CONSENT_SCOPES = ['photo_usage', 'family_agreement'] as const;
+export type ConsentScope = (typeof CONSENT_SCOPES)[number];
+export const consentScopeSchema = z.enum(CONSENT_SCOPES);
+
+/**
  * `features_json` 的 12 键边界校验（`docs/prd/modules/M03-身份锚点提取.md` §5.5 第 3 步）：
  * 键名固定、每键非空字符串，**多余键被 `.strip()` 丢弃**（解析照样成功、落库恰 12 键）；
  * 缺键或类型不符才失败。锚点落库（repository）与上游返回解析（handler）共用这一份。

@@ -226,6 +226,19 @@ export const findNextQueuedId = (): number | null => {
   return row === undefined ? null : row.id;
 };
 
+/**
+ * `DELETE /api/anchors/:id` 的物理删除（`identity_anchors` 无 `deleted_at` 列，
+ * `docs/prd/modules/M08-账号历史与彻底删除.md` §3.3）；返回命中行数。
+ * 级联（generations / results / generated 照片 / 反推任务）归 `tickets/T13`。
+ */
+export const hardDeleteAnchor = (id: number, userId: number): number =>
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare('DELETE FROM identity_anchors WHERE id = @id AND user_id = @userId')
+        .run({ id, userId }).changes,
+    )();
+
 /** 强制确认节点：仅 0→1 落值，重复确认不改 `confirmed_at`（`docs/prd/modules/M04-身份确认与授权.md` §5.1 ⑥）。 */
 export const markConfirmed = (id: number, confirmedAt: Iso): void => {
   getDb()

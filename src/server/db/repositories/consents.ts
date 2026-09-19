@@ -92,3 +92,19 @@ export const revokeByAnchor = (anchorId: number, revokedAt: Iso): void => {
         .run({ anchorId, revokedAt }),
     )();
 };
+
+/**
+ * 吊销某用户某 `scope` 的全部有效行（`docs/prd/modules/M04-身份确认与授权.md` §5.5）：
+ * 不删行、不改 `agreed_at`，只写 `revoked_at`；返回被吊销的行数。
+ * 入口只有 `anchorService.revokeConsents`（无端点、无 UI）。
+ */
+export const revokeByScope = (userId: number, scope: string, revokedAt: Iso): number =>
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `UPDATE consents SET revoked_at = @revokedAt
+           WHERE user_id = @userId AND scope = @scope AND revoked_at IS NULL`,
+        )
+        .run({ userId, scope, revokedAt }).changes,
+    )();

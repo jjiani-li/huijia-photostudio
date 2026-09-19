@@ -14,8 +14,10 @@ import { nowIso } from '../../../src/server/domain/time';
 import { readFixture } from '../../../src/server/ark/fixtures';
 import { anchorExtractHandler } from '../../../src/jobs/handlers/anchorExtract';
 import { POST } from './route';
-import { GET } from './[id]/route';
+import { DELETE as DELETE_ANCHOR, GET } from './[id]/route';
 import { POST as RETRY } from './[id]/retry/route';
+import { POST as CONFIRM } from './[id]/confirm/route';
+import { revokeConsents } from '../../../src/server/domain/anchorService';
 import { POST as UPLOAD } from '../photos/route';
 import { POST as PREPROCESS } from '../photos/[id]/preprocess/route';
 
@@ -88,6 +90,43 @@ const errorCode = async (res: Response): Promise<string> =>
 
 const auditCount = (action: string): number =>
   (getDb().prepare('SELECT COUNT(*) AS n FROM audit_logs WHERE action = ?').get(action) as { n: number }).n;
+
+const anchorCount = (): number =>
+  (getDb().prepare('SELECT COUNT(*) AS n FROM identity_anchors').get() as { n: number }).n;
+
+const consentCount = (anchorId: number): number =>
+  (
+    getDb()
+      .prepare('SELECT COUNT(*) AS n FROM consents WHERE anchor_id = ? AND revoked_at IS NULL')
+      .get(anchorId) as { n: number }
+  ).n;
+
+const GOOD_FEATURES = readFixture<{ features: unknown }>('ark/anchor-extract.json').features;
+
+/** 把锚点推进到 `succeeded`（confirm / retry 的前置），供用例跳过 worker。 */
+const markSucceeded = (id: number): void => {
+  getDb()
+    .prepare(
+      `UPDATE identity_anchors SET status = 'succeeded', anchor_text = @text, features_json = @features,
+              finished_at = @at WHERE id = @id`,
+    )
+    .run({ id, text: '甲'.repeat(60), features: JSON.stringify(GOOD_FEATURES), at: nowIso() });
+};
+
+const jsonReq = (url: string, payload: unknown): NextRequest =>
+  asReq(
+    new Request(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  );
+
+const confirmAnchor = (id: number, payload: unknown): Promise<Response> =>
+  CONFIRM(jsonReq(`http://localhost/api/anchors/${id}/confirm`, payload), ctx({ id: String(id) }));
+
+const deleteAnchorReq = (id: number): Promise<Response> =>
+  DELETE_ANCHOR(asReq(new Request(`http://localhost/api/anchors/${id}`, { method: 'DELETE' })), ctx({ id: String(id) }));
 
 describe('POST /api/anchors', () => {
   it('202 + 通过 anchorSchema 的 queued 行；缺省 preprocessedPhotoId 时自动预处理；写一条 anchor.extract 审计', async () => {
@@ -175,6 +214,7 @@ describe('POST /api/anchors/:id/retry', () => {
     const created = anchorSchema.parse(
       ((await (await createAnchor({ photoIds: [photo.id] })).json()) as { anchor: unknown }).anchor,
     );
+    markSucceeded(created.id);
 
     const res = await RETRY(asReq(new Request('http://localhost/x', { method: 'POST' })), ctx({ id: String(created.id) }));
     expect(res.status).toBe(202);
@@ -191,11 +231,222 @@ describe('POST /api/anchors/:id/retry', () => {
       }).anchor,
     );
     expect(old.attempt).toBe(0);
-    expect(old.status).toBe('queued');
+    expect(old.status).toBe('succeeded');
+  });
+
+  it('旧行未终态（queued）→ 409 ANCHOR_NOT_CONFIRMED，不产生新行（M04 §5.2 ②）', async () => {
+    const photo = await upload();
+    const created = anchorSchema.parse(
+      ((await (await createAnchor({ photoIds: [photo.id] })).json()) as { anchor: unknown }).anchor,
+    );
+    const before = anchorCount();
+
+    const res = await RETRY(asReq(new Request('http://localhost/x', { method: 'POST' })), ctx({ id: String(created.id) }));
+
+    expect(res.status).toBe(409);
+    expect(await errorCode(res)).toBe('ANCHOR_NOT_CONFIRMED');
+    expect(anchorCount()).toBe(before);
   });
 
   it('不存在的锚点 → 404 ANCHOR_NOT_FOUND', async () => {
     const res = await RETRY(asReq(new Request('http://localhost/x', { method: 'POST' })), ctx({ id: '999999' }));
+    expect(res.status).toBe(404);
+    expect(await errorCode(res)).toBe('ANCHOR_NOT_FOUND');
+  });
+});
+
+describe('POST /api/anchors/:id/confirm', () => {
+  const newAnchor = async (): Promise<{ id: number }> => {
+    const photo = await upload();
+    return anchorSchema.parse(
+      ((await (await createAnchor({ photoIds: [photo.id] })).json()) as { anchor: unknown }).anchor,
+    );
+  };
+
+  it('SEC-09：两项授权齐全 → 200，2 行有效 consents + 两条审计，且 agreed_at ≡ 审计 created_at', async () => {
+    const created = await newAnchor();
+    markSucceeded(created.id);
+    const beforeConfirm = auditCount('anchor.confirm');
+    const beforeAgree = auditCount('consent.agree');
+
+    const res = await confirmAnchor(created.id, {
+      confirmed: true,
+      consents: ['photo_usage', 'family_agreement'],
+    });
+
+    expect(res.status).toBe(200);
+    const out = (await res.json()) as { anchor: unknown; consents: string[] };
+    const anchor = anchorSchema.parse(out.anchor);
+    expect(anchor.confirmedByUser).toBe(true);
+    expect(anchor.confirmedAt).not.toBeNull();
+    expect(out.consents).toEqual(['photo_usage', 'family_agreement']);
+    expect(consentCount(created.id)).toBe(2);
+    expect(auditCount('anchor.confirm')).toBe(beforeConfirm + 1);
+    expect(auditCount('consent.agree')).toBe(beforeAgree + 1);
+
+    const agreed = getDb()
+      .prepare('SELECT agreed_at FROM consents WHERE anchor_id = ? ORDER BY id LIMIT 1')
+      .get(created.id) as { agreed_at: string };
+    const auditRow = getDb()
+      .prepare("SELECT created_at FROM audit_logs WHERE action = 'anchor.confirm' ORDER BY id DESC LIMIT 1")
+      .get() as { created_at: string };
+    expect(auditRow.created_at).toBe(agreed.agreed_at);
+  });
+
+  it('SEC-02：缺 family_agreement → 400 INVALID_PARAM（details.fields.consents），事务回滚、无任何写入', async () => {
+    const created = await newAnchor();
+    markSucceeded(created.id);
+    const beforeConfirm = auditCount('anchor.confirm');
+
+    const res = await confirmAnchor(created.id, { confirmed: true, consents: ['photo_usage'] });
+
+    expect(res.status).toBe(400);
+    const err = (await res.json()) as { error: { code: string; details: { fields: { consents: string[] } } } };
+    expect(err.error.code).toBe('INVALID_PARAM');
+    expect(err.error.details.fields.consents).toEqual(['缺少 family_agreement']);
+    const row = getDb()
+      .prepare('SELECT confirmed_by_user FROM identity_anchors WHERE id = ?')
+      .get(created.id) as { confirmed_by_user: number };
+    expect(row.confirmed_by_user).toBe(0);
+    expect(consentCount(created.id)).toBe(0);
+    expect(auditCount('anchor.confirm')).toBe(beforeConfirm);
+  });
+
+  it('缺 photo_usage（反方向）也 → 400 且列出缺失项', async () => {
+    const created = await newAnchor();
+    markSucceeded(created.id);
+
+    const res = await confirmAnchor(created.id, { confirmed: true, consents: ['family_agreement'] });
+
+    expect(res.status).toBe(400);
+    const err = (await res.json()) as { error: { details: { fields: { consents: string[] } } } };
+    expect(err.error.details.fields.consents).toEqual(['缺少 photo_usage']);
+    expect(consentCount(created.id)).toBe(0);
+  });
+
+  it('{ confirmed: false } → 400 INVALID_PARAM，不写行（schema z.literal(true)）', async () => {
+    const created = await newAnchor();
+    markSucceeded(created.id);
+
+    const res = await confirmAnchor(created.id, { confirmed: false, consents: ['photo_usage', 'family_agreement'] });
+
+    expect(res.status).toBe(400);
+    expect(await errorCode(res)).toBe('INVALID_PARAM');
+    expect(consentCount(created.id)).toBe(0);
+  });
+
+  it('锚点非 succeeded → 409 ANCHOR_NOT_CONFIRMED，不写行', async () => {
+    const created = await newAnchor();
+
+    const res = await confirmAnchor(created.id, {
+      confirmed: true,
+      consents: ['photo_usage', 'family_agreement'],
+    });
+
+    expect(res.status).toBe(409);
+    expect(await errorCode(res)).toBe('ANCHOR_NOT_CONFIRMED');
+    expect(consentCount(created.id)).toBe(0);
+  });
+
+  it('他人锚点 → 404 ANCHOR_NOT_FOUND（不返回 403）', async () => {
+    const created = await newAnchor();
+    markSucceeded(created.id);
+    getDb().prepare('UPDATE identity_anchors SET user_id = 2 WHERE id = ?').run(created.id);
+
+    const res = await confirmAnchor(created.id, {
+      confirmed: true,
+      consents: ['photo_usage', 'family_agreement'],
+    });
+
+    expect(res.status).toBe(404);
+    expect(await errorCode(res)).toBe('ANCHOR_NOT_FOUND');
+  });
+
+  it('重复 confirm → 仍 200，consents 仍 2 行、confirmed_at 不变，审计再写 2 条', async () => {
+    const created = await newAnchor();
+    markSucceeded(created.id);
+    const payload = { confirmed: true, consents: ['photo_usage', 'family_agreement'] };
+
+    const first = anchorSchema.parse(
+      ((await (await confirmAnchor(created.id, payload)).json()) as { anchor: unknown }).anchor,
+    );
+    const beforeSecond = auditCount('anchor.confirm');
+    const second = anchorSchema.parse(
+      ((await (await confirmAnchor(created.id, payload)).json()) as { anchor: unknown }).anchor,
+    );
+
+    expect(second.confirmedAt).toBe(first.confirmedAt);
+    expect(consentCount(created.id)).toBe(2);
+    expect(auditCount('anchor.confirm')).toBe(beforeSecond + 1);
+  });
+
+  it('吊销 photo_usage 后再 confirm → 新增 1 行、旧行 revoked_at 仍非空（M04 §8.1 ④）', async () => {
+    const created = await newAnchor();
+    markSucceeded(created.id);
+    const payload = { confirmed: true, consents: ['photo_usage', 'family_agreement'] };
+    await confirmAnchor(created.id, payload);
+
+    expect(revokeConsents(1, 'photo_usage')).toBeGreaterThan(0);
+    await confirmAnchor(created.id, payload);
+
+    const rows = getDb()
+      .prepare('SELECT scope, revoked_at FROM consents WHERE anchor_id = ? ORDER BY id')
+      .all(created.id) as Array<{ scope: string; revoked_at: string | null }>;
+    expect(rows.filter((r) => r.scope === 'photo_usage')).toHaveLength(2);
+    expect(rows.filter((r) => r.scope === 'photo_usage' && r.revoked_at !== null)).toHaveLength(1);
+    expect(consentCount(created.id)).toBe(2);
+  });
+});
+
+describe('DELETE /api/anchors/:id', () => {
+  it('200 + cascaded 全零；锚点行物理删除（GET → 404）；写 anchor.delete 审计', async () => {
+    const photo = await upload();
+    const created = anchorSchema.parse(
+      ((await (await createAnchor({ photoIds: [photo.id] })).json()) as { anchor: unknown }).anchor,
+    );
+    markSucceeded(created.id);
+    const before = auditCount('anchor.delete');
+
+    const res = await deleteAnchorReq(created.id);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, cascaded: { generations: 0, results: 0 } });
+    const after = await GET(asReq(new Request('http://localhost/x')), ctx({ id: String(created.id) }));
+    expect(after.status).toBe(404);
+    expect(auditCount('anchor.delete')).toBe(before + 1);
+  });
+
+  it('删除吊销该锚点的有效授权，但 consents 行保留（不删行）', async () => {
+    const photo = await upload();
+    const created = anchorSchema.parse(
+      ((await (await createAnchor({ photoIds: [photo.id] })).json()) as { anchor: unknown }).anchor,
+    );
+    markSucceeded(created.id);
+    await confirmAnchor(created.id, { confirmed: true, consents: ['photo_usage', 'family_agreement'] });
+
+    await deleteAnchorReq(created.id);
+
+    const rows = getDb()
+      .prepare('SELECT revoked_at FROM consents WHERE anchor_id = ?')
+      .all(created.id) as Array<{ revoked_at: string | null }>;
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.revoked_at !== null)).toBe(true);
+  });
+
+  it('不存在 / 已删除的锚点 → 404 ANCHOR_NOT_FOUND', async () => {
+    const res = await deleteAnchorReq(999999);
+    expect(res.status).toBe(404);
+    expect(await errorCode(res)).toBe('ANCHOR_NOT_FOUND');
+  });
+
+  it('他人锚点 → 404 ANCHOR_NOT_FOUND（不返回 403）', async () => {
+    const photo = await upload();
+    const created = anchorSchema.parse(
+      ((await (await createAnchor({ photoIds: [photo.id] })).json()) as { anchor: unknown }).anchor,
+    );
+    getDb().prepare('UPDATE identity_anchors SET user_id = 2 WHERE id = ?').run(created.id);
+
+    const res = await deleteAnchorReq(created.id);
     expect(res.status).toBe(404);
     expect(await errorCode(res)).toBe('ANCHOR_NOT_FOUND');
   });

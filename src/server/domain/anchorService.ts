@@ -9,14 +9,15 @@ import {
   insertPreprocessed,
   type PhotoRecord,
 } from '../db/repositories/photos';
-import { findByIdForUser, insert, type AnchorRecord } from '../db/repositories/anchors';
-import { writeAudit } from '../security/audit';
+import { findByIdForUser, hardDeleteAnchor, insert, markConfirmed, type AnchorRecord } from '../db/repositories/anchors';
+import { ensureActive, revokeByAnchor, revokeByScope } from '../db/repositories/consents';
+import { audit } from '../security/audit';
 import { buildAnalysisInput, normalize } from '../images/preprocess';
 import { scoreQuality } from '../images/quality';
 import { arkVisionModel } from '../ark';
 import { ANCHOR_PROMPT_VERSION } from '../prompt/versions';
 import { toPhotoDto } from './photoService';
-import type { Anchor, Photo, Quality } from '../../shared/types';
+import { CONSENT_SCOPES, type Anchor, type ConsentScope, type Photo, type Quality } from '../../shared/types';
 
 /**
  * F1：预处理（`docs/prd/modules/M02-预处理与质量评分.md` §5.3）与锚点编排
@@ -79,13 +80,15 @@ const doPreprocess = async (userId: number, photoId: number): Promise<Preprocess
         sha256,
         quality,
       });
-      writeAudit({
-        action: 'photo.preprocess',
-        userId,
-        target: `photo:${inserted.id}`,
-        meta: { sourcePhotoId: photoId, usable: quality.usable, readability: quality.readability },
-        createdAt: nowIso(),
-      });
+      audit(
+        {
+          action: 'photo.preprocess',
+          userId,
+          target: `photo:${inserted.id}`,
+          meta: { sourcePhotoId: photoId, usable: quality.usable, readability: quality.readability },
+        },
+        nowIso(),
+      );
       return inserted;
     })();
     return { photo, quality };
@@ -204,13 +207,15 @@ export const createAnchor = async (input: CreateAnchorInput): Promise<Anchor> =>
       quality: null,
       createdAt,
     });
-    writeAudit({
-      action: 'anchor.extract',
-      userId,
-      target: `anchor:${inserted.id}`,
-      meta: { photoIds, preprocessedPhotoId: preprocessed.id },
+    audit(
+      {
+        action: 'anchor.extract',
+        userId,
+        target: `anchor:${inserted.id}`,
+        meta: { photoIds, preprocessedPhotoId: preprocessed.id },
+      },
       createdAt,
-    });
+    );
     return inserted;
   })();
 
@@ -228,12 +233,17 @@ export const getAnchor = (userId: number, anchorId: number): Anchor => {
 };
 
 /**
- * `POST /api/anchors/:id/retry`（§3.3）：**新建行**，`attempt = 旧 + 1`，继承 `inputPhotoIds` /
- * `preprocessedPhotoId`，旧行原样保留（`docs/prd/spec/01-领域模型与数据库.md` §2.1）。
+ * `POST /api/anchors/:id/retry`（`docs/prd/modules/M04-身份确认与授权.md` §5.2）：**新建行**，
+ * `attempt = 旧 + 1`，继承 `input_photo_ids` / `preprocessed_photo_id` / `quality_json`，旧行原样保留
+ * （`docs/prd/spec/01-领域模型与数据库.md` §2.1）。旧行必须为终态，`queued` / `running`
+ * → `409 ANCHOR_NOT_CONFIRMED`（复用「锚点不可用」语义）。
  */
 export const retryAnchor = (userId: number, anchorId: number): Anchor => {
   const previous = findByIdForUser(userId, anchorId);
   if (previous === null) throw appError('ANCHOR_NOT_FOUND');
+  if (previous.status !== 'succeeded' && previous.status !== 'failed') {
+    throw appError('ANCHOR_NOT_CONFIRMED');
+  }
 
   const createdAt = nowIso();
   const record = getDb().transaction(() => {
@@ -245,18 +255,105 @@ export const retryAnchor = (userId: number, anchorId: number): Anchor => {
       attempt: previous.attempt + 1,
       model: arkVisionModel(),
       promptVersion: ANCHOR_PROMPT_VERSION,
-      quality: null,
+      quality: previous.quality,
       createdAt,
     });
-    writeAudit({
-      action: 'anchor.extract',
-      userId,
-      target: `anchor:${inserted.id}`,
-      meta: { retryOf: previous.id, attempt: inserted.attempt },
+    audit(
+      {
+        action: 'anchor.extract',
+        userId,
+        target: `anchor:${inserted.id}`,
+        meta: { retryOf: previous.id, attempt: inserted.attempt },
+      },
       createdAt,
-    });
+    );
     return inserted;
   })();
 
   return toAnchorDto(record, loadAnchorPhotos(userId, record));
+};
+
+/**
+ * `POST /api/anchors/:id/confirm`（`docs/prd/modules/M04-身份确认与授权.md` §5.1）：单事务内
+ * ①归属 → ②可用性 → ③授权完整性 → ④取一次时间 → ⑤幂等写 `consents` 两行 → ⑥`markConfirmed`（仅 0→1）
+ * → ⑦两条审计（`anchor.confirm` / `consent.agree`）。③失败即回滚，`confirmed_by_user` 仍为 0（`SEC-02`）。
+ */
+export const confirmAnchor = (
+  userId: number,
+  anchorId: number,
+  consents: ConsentScope[],
+): { anchor: Anchor; consents: ConsentScope[] } => {
+  return getDb().transaction(() => {
+    // ①②：归属与存在性（「不存在」「他人」不区分）→ 404；可用性 → 409。
+    const record = findByIdForUser(userId, anchorId);
+    if (record === null) throw appError('ANCHOR_NOT_FOUND');
+    if (record.status !== 'succeeded' || record.anchorText === null) {
+      throw appError('ANCHOR_NOT_CONFIRMED');
+    }
+
+    // ③：两项授权必须同时提交，缺项走 details.fields.consents（不新增错误码）。
+    const missing = CONSENT_SCOPES.filter((scope) => !consents.includes(scope));
+    if (missing.length > 0) {
+      throw appError('INVALID_PARAM', { fields: { consents: missing.map((scope) => `缺少 ${scope}`) } });
+    }
+
+    // ④：时间戳只取一次，`agreed_at` 与审计 `created_at` 逐字符相等（§5.1 ④）。
+    const at = nowIso();
+
+    // ⑤：幂等写两行（同 anchorId + scope 未吊销则复用，不新增）。
+    for (const scope of CONSENT_SCOPES) {
+      ensureActive({ userId, anchorId, scope, agreedAt: at });
+    }
+
+    // ⑥：仅 0→1 落 `confirmed_at`，重复确认不改首次确认时间。
+    markConfirmed(anchorId, at);
+
+    // ⑦：每次请求都写审计（重复确认也写），`target = anchor:{id}`。
+    audit(
+      { userId, action: 'anchor.confirm', target: `anchor:${anchorId}`, meta: { attempt: record.attempt } },
+      at,
+    );
+    audit(
+      { userId, action: 'consent.agree', target: `anchor:${anchorId}`, meta: { scopes: [...CONSENT_SCOPES] } },
+      at,
+    );
+
+    const updated = findByIdForUser(userId, anchorId);
+    if (updated === null) throw appError('INTERNAL', { reason: 'confirm 后读回失败' });
+    return { anchor: toAnchorDto(updated, loadAnchorPhotos(userId, updated)), consents: [...CONSENT_SCOPES] };
+  })();
+};
+
+/**
+ * 服务端吊销入口（`docs/prd/modules/M04-身份确认与授权.md` §5.5）：吊销该用户某授权项的全部有效行。
+ * 本期无 UI、无端点；调用点只有 `scripts/acceptance.ts` 的 `SEC-03` 与将来的投诉 / 账号处置流程。
+ * 16 个 `AuditAction` 里没有吊销项，故不写审计。
+ */
+export const revokeConsents = (userId: number, scope: ConsentScope): number =>
+  revokeByScope(userId, scope, nowIso());
+
+/**
+ * `DELETE /api/anchors/:id`（`docs/prd/modules/M04-身份确认与授权.md` §5.4）：幂等物理删除该锚点行
+ * + 吊销其有效授权 + 写 `anchor.delete` 审计。`identity_anchors` 无 `deleted_at` 列，故是物理 DELETE。
+ * 级联（`generations` / `generation_results` / generated 照片 / 反推任务）归 `tickets/T13` 的
+ * `deletionService`，届时本函数迁入其中（`cascaded` 键名不变，`spec/03-接口契约.md` §3.3）。
+ */
+export const deleteAnchor = (params: {
+  userId: number;
+  anchorId: number;
+}): { ok: true; cascaded: { generations: number; results: number } } => {
+  return getDb().transaction(() => {
+    const existing = findByIdForUser(params.userId, params.anchorId);
+    if (existing === null) throw appError('ANCHOR_NOT_FOUND');
+    const at = nowIso();
+    // consents 不删行，命中该锚点的有效行写 revoked_at（§5.5、`modules/M08` §3.3）。
+    revokeByAnchor(params.anchorId, at);
+    hardDeleteAnchor(params.anchorId, params.userId);
+    const cascaded = { generations: 0, results: 0 };
+    audit(
+      { userId: params.userId, action: 'anchor.delete', target: `anchor:${params.anchorId}`, meta: cascaded },
+      at,
+    );
+    return { ok: true as const, cascaded };
+  })();
 };
