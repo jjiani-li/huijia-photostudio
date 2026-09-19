@@ -20,6 +20,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "check": "tsc --noEmit && eslint .",
+    "check:acceptance": "tsx scripts/acceptance.ts",
     "check:docs": "node scripts/check-docs.mjs",
     "test:docs": "node --test scripts/check-docs.test.mjs"
   },
