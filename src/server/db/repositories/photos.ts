@@ -193,6 +193,20 @@ export const insertPreprocessed = (input: NewPreprocessed): PhotoRecord => {
   })();
 };
 
+/**
+ * 回填 `preprocessed` 行的 `quality_json`（`docs/prd/modules/M03-身份锚点提取.md` §3：
+ * 提取前发现为空时补算一次后写回；本环节不重算已有值）。
+ */
+export const updateQualityJson = (id: number, quality: Quality): void => {
+  const db = getDb();
+  db.transaction(() => {
+    const info = db
+      .prepare('UPDATE photos SET quality_json = @qualityJson WHERE id = @id')
+      .run({ id, qualityJson: JSON.stringify(quality) });
+    if (info.changes !== 1) throw new Error(`photos ${id} 的 quality_json 回填失败`);
+  })();
+};
+
 export const listActivePhotosByIds = (userId: number, ids: number[]): PhotoRecord[] => {
   if (ids.length === 0) return [];
   const placeholders = ids.map(() => '?').join(', ');

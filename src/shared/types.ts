@@ -94,6 +94,28 @@ export interface AnchorFeatures {
   build: string;
 }
 
+/**
+ * 身份锚点（`docs/prd/spec/03-接口契约.md` §3.3 / §4）：既是提取任务的作业记录，也是确认后的锚点。
+ * `status !== 'succeeded'` 时 `anchorText` / `features` 为 `null`；`failed` 时 `error` 非空。
+ */
+export interface Anchor {
+  id: number;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  attempt: number;
+  anchorText: string | null;
+  features: AnchorFeatures | null;
+  model: string;
+  promptVersion: string;
+  quality: Quality | null;
+  confirmedByUser: boolean;
+  confirmedAt: Iso | null;
+  error: { code: string; message: string } | null;
+  sourcePhotos: Photo[];
+  preprocessedPhoto: Photo | null;
+  createdAt: Iso;
+  finishedAt: Iso | null;
+}
+
 export const photoSchema = z.object({
   id: z.number().int(),
   kind: z.enum(['original', 'preprocessed', 'generated']),
@@ -123,3 +145,45 @@ export const qualitySchema = z.object({
 });
 
 export const moderationVerdictSchema = z.enum(['pass', 'review', 'reject']);
+
+/**
+ * `features_json` 的 12 键边界校验（`docs/prd/modules/M03-身份锚点提取.md` §5.5 第 3 步）：
+ * 键名固定、每键非空字符串，**多余键被 `.strip()` 丢弃**（解析照样成功、落库恰 12 键）；
+ * 缺键或类型不符才失败。锚点落库（repository）与上游返回解析（handler）共用这一份。
+ */
+export const anchorFeaturesSchema = z
+  .object({
+    gender: z.string().min(1),
+    ageRange: z.string().min(1),
+    hair: z.string().min(1),
+    faceShape: z.string().min(1),
+    forehead: z.string().min(1),
+    eyebrows: z.string().min(1),
+    eyes: z.string().min(1),
+    nose: z.string().min(1),
+    mouth: z.string().min(1),
+    skin: z.string().min(1),
+    distinctive: z.string().min(1),
+    build: z.string().min(1),
+  })
+  .strip();
+
+const anchorErrorSchema = z.object({ code: z.string(), message: z.string() });
+
+export const anchorSchema = z.object({
+  id: z.number().int(),
+  status: z.enum(['queued', 'running', 'succeeded', 'failed']),
+  attempt: z.number().int(),
+  anchorText: z.string().nullable(),
+  features: anchorFeaturesSchema.nullable(),
+  model: z.string(),
+  promptVersion: z.string(),
+  quality: qualitySchema.nullable(),
+  confirmedByUser: z.boolean(),
+  confirmedAt: z.string().nullable(),
+  error: anchorErrorSchema.nullable(),
+  sourcePhotos: z.array(photoSchema),
+  preprocessedPhoto: photoSchema.nullable(),
+  createdAt: z.string(),
+  finishedAt: z.string().nullable(),
+});
