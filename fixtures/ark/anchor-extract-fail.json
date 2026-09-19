@@ -1,0 +1,8 @@
+{
+  "version": "anchor-v1",
+  "model": "doubao-seed-2-1-turbo-260628",
+  "anchorText": null,
+  "features": null,
+  "verdict": "unusable",
+  "reason": "照片里没有可辨识的人脸区域，无法提取身份锚点特征"
+}

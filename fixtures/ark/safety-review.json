@@ -1,0 +1,11 @@
+{
+  "version": "safety-review-v1",
+  "model": "doubao-seed-2-1-turbo-260628",
+  "defaultVariantId": "pass",
+  "switchVariants": { "upload": null, "prompt": null, "result": null },
+  "variants": [
+    { "id": "pass", "verdict": "pass", "reason": null },
+    { "id": "review-uncertain", "verdict": "review", "reason": "画面中出现无法辨识的文字标语，建议人工确认" },
+    { "id": "reject-violation", "verdict": "reject", "reason": "样本判定为违规内容（mock 固定样本）" }
+  ]
+}

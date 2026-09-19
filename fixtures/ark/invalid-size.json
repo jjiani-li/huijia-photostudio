@@ -1,0 +1,8 @@
+{
+  "kind": "http",
+  "status": 400,
+  "error": {
+    "code": "InvalidParameter",
+    "message": "The parameter `size` specified in the request is invalid: image size must be at least 3686400 pixels"
+  }
+}

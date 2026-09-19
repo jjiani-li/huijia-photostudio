@@ -1,0 +1,19 @@
+{
+  "version": "anchor-v1",
+  "model": "doubao-seed-2-1-turbo-260628",
+  "anchorText": "男性，大约 60 岁，方脸，额头宽，眉毛浓，单眼皮，鼻梁挺直，嘴唇偏薄，皮肤偏黄有皱纹，体型偏瘦",
+  "features": {
+    "gender": "男",
+    "ageRange": "56-64",
+    "hair": "短发夹白",
+    "faceShape": "方脸",
+    "forehead": "宽",
+    "eyebrows": "浓",
+    "eyes": "单眼皮",
+    "nose": "挺直",
+    "mouth": "偏薄",
+    "skin": "偏黄有皱纹",
+    "distinctive": "右眉上方一颗小痣",
+    "build": "偏瘦"
+  }
+}

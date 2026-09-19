@@ -1,0 +1,10 @@
+{
+  "model": "doubao-seedream-5-0-lite-260128",
+  "created": 1789629319,
+  "data": [
+    { "url": "fixtures/images/generated-01.png", "size": "2048x2048" },
+    { "url": "fixtures/images/generated-02.png", "size": "2048x2048" },
+    { "url": "fixtures/images/generated-03.png", "size": "2048x2048" }
+  ],
+  "usage": { "generated_images": 3, "output_tokens": 43200, "total_tokens": 43200 }
+}

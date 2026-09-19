@@ -1,0 +1,12 @@
+{
+  "version": "era-check-v1",
+  "promptVersion": "era-check-v1",
+  "model": "doubao-seed-2-1-turbo-260628",
+  "switch": { "activeCaseId": null },
+  "defaultCaseId": "clean",
+  "cases": [
+    { "id": "clean", "match": null, "verdict": "pass", "findings": [], "estimatedAgeRange": null },
+    { "id": "smartphone-e2s3", "match": { "eraCode": "E2", "sceneId": 3 }, "verdict": "review", "estimatedAgeRange": "66-74", "findings": [ { "item": "智能手机", "reason": "人物右手持黑色全面屏手机，1990 年代不存在该物件" } ] },
+    { "id": "modern-tower-reject", "match": null, "verdict": "reject", "estimatedAgeRange": "80-86", "findings": [ { "item": "玻璃幕墙现代楼宇", "reason": "背景出现玻璃幕墙高层建筑，晚于 1980—1990 年代" }, { "item": "现代汽车外观", "reason": "右侧停靠车辆为流线型现代车身，晚于所选年代" } ] }
+  ]
+}

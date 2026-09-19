@@ -1,0 +1,8 @@
+{
+  "kind": "http",
+  "status": 403,
+  "error": {
+    "code": "ModelNotOpen",
+    "message": "Your account has not opened the service of the model doubao-seedream-5-0-lite-260128"
+  }
+}

@@ -78,6 +78,22 @@ export interface PhotoList {
 /** `content_reviews.verdict` 的取值域（`spec/03` §4、`spec/06` §5.6）。 */
 export type ModerationVerdict = 'pass' | 'review' | 'reject';
 
+/** 结构化面部特征（12 键，`spec/03-接口契约.md` §4；也称身份锚点特征）。 */
+export interface AnchorFeatures {
+  gender: string;
+  ageRange: string;
+  hair: string;
+  faceShape: string;
+  forehead: string;
+  eyebrows: string;
+  eyes: string;
+  nose: string;
+  mouth: string;
+  skin: string;
+  distinctive: string;
+  build: string;
+}
+
 export const photoSchema = z.object({
   id: z.number().int(),
   kind: z.enum(['original', 'preprocessed', 'generated']),
