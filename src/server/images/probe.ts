@@ -22,8 +22,9 @@ const FORMAT_MIME: Record<string, string> = {
   heic: 'image/heic',
 };
 
-/** 「无法识别的格式 / 解码器打不开」类错误 → `INVALID_FILE_TYPE`；其余 → `STORAGE_ERROR`。 */
-const DECODE_ERROR_RE = /unsupported|unrecogniz|unable to (open|decode)|not a (valid|known)|invalid/i;
+/** 「无法识别的格式 / 解码器打不开 / 文件损坏」类错误 → `INVALID_FILE_TYPE`；其余 → `STORAGE_ERROR`。 */
+const DECODE_ERROR_RE =
+  /unsupported|unrecogniz|unable to (open|decode)|not a (valid|known)|invalid|corrupt|premature|truncated/i;
 
 export const probeImage = async (buffer: Buffer): Promise<ProbeResult> => {
   let metadata: sharp.Metadata;

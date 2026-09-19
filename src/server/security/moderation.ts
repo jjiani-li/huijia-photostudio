@@ -1,4 +1,4 @@
-import { insert as insertReview } from '../db/repositories/reviews';
+import { insertContentReview } from '../db/repositories/reviews';
 import { nowIso } from '../domain/time';
 import type { ModerationVerdict } from '../../shared/types';
 
@@ -17,7 +17,7 @@ export const moderateUpload = (params: {
   now?: string;
 }): ModerationVerdict => {
   const verdict: ModerationVerdict = 'pass';
-  insertReview({
+  insertContentReview({
     userId: params.userId,
     stage: 'upload',
     targetType: 'photo',

@@ -134,6 +134,37 @@ describe('响应头与删除幂等', () => {
     );
     expect(generatedRes.headers.get('X-AIGC-Generated')).toBe('true');
     expect(generatedRes.headers.get('Cache-Control')).toBe('private, max-age=3600');
+
+    const preKey = buildKey(1, 'jpg');
+    const preSaved = await getStorage().save(preKey, await jpeg(50, 50));
+    const preprocessed = insertPhoto({
+      userId: 1,
+      kind: 'preprocessed',
+      storageKey: preKey,
+      mime: 'image/jpeg',
+      bytes: preSaved.bytes,
+      width: 50,
+      height: 50,
+      sha256: 'b'.repeat(64),
+      sourcePhotoId: original.id,
+      qualityJson: {
+        usable: true,
+        faceDetected: true,
+        faceCount: 1,
+        sharpness: 0.5,
+        readability: 0.5,
+        damageLevel: 0.1,
+        warnings: [],
+        advice: null,
+      },
+      createdAt: nowIso(),
+    });
+    const preRes = await GET(
+      asReq(new Request(`http://localhost/api/photos/${preprocessed.id}/file`)),
+      ctx({ id: String(preprocessed.id) }),
+    );
+    expect(preRes.headers.get('X-AIGC-Generated')).toBeNull();
+    expect(preRes.headers.get('Cache-Control')).toBe('private, max-age=3600');
   });
 
   it('连续两次 DELETE → 均 200，第二次 cascaded 全 0', async () => {

@@ -46,7 +46,7 @@ const toReview = (row: ContentReviewRow): ContentReviewRecord => ({
   createdAt: row.created_at,
 });
 
-export interface InsertContentReviewInput {
+export interface NewContentReview {
   userId: number;
   stage: ReviewStage;
   targetType: string;
@@ -57,7 +57,7 @@ export interface InsertContentReviewInput {
   createdAt: Iso;
 }
 
-export const insert = (input: InsertContentReviewInput): ContentReviewRecord => {
+export const insertContentReview = (input: NewContentReview): ContentReviewRecord => {
   const db = getDb();
   return db.transaction(() => {
     const info = db

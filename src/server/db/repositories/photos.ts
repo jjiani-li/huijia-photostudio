@@ -1,15 +1,13 @@
 import { getDb } from '../connection';
 import { parseJsonColumn } from '../json';
 import { nowIso } from '../../domain/time';
-import { qualitySchema, type Iso, type Quality } from '../../../shared/types';
+import { qualitySchema, type Iso, type PhotoKind, type Quality } from '../../../shared/types';
 
 /**
  * `photos` 表全部 SQL（`docs/prd/modules/M01-照片资产与存储.md` §5、`spec/01-领域模型与数据库.md` §3.4）。
  * 入参为原子值 / DTO，返回 camelCase 领域对象 `PhotoRecord`，**不返回数据库原始行**。
  * 写函数自带 `db.transaction`，可在 `domain/*Service` 的事务内安全嵌套。
  */
-export type PhotoKind = 'original' | 'preprocessed' | 'generated';
-
 export interface PhotoRecord {
   id: number;
   userId: number;

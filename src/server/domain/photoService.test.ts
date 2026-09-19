@@ -7,12 +7,12 @@ import { closeDb, getDb } from '../db/connection';
 import { runMigrations } from '../db/migrate';
 import { runSeed } from '../db/seed';
 import { resetStorage } from '../storage';
-import { insert as insertReview } from '../db/repositories/reviews';
+import { insertContentReview } from '../db/repositories/reviews';
 import { deletePhoto, readPhotoForUser, uploadPhoto, type UploadFile } from './photoService';
 
 vi.mock('../db/repositories/reviews', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../db/repositories/reviews')>();
-  return { ...actual, insert: vi.fn(actual.insert) };
+  return { ...actual, insertContentReview: vi.fn(actual.insertContentReview) };
 });
 
 /**
@@ -117,7 +117,7 @@ describe('用例 5 · 去重与跨用户', () => {
 describe('用例 6 · 三写一致性回滚', () => {
   it('content_reviews 写入失败 → 事务回滚、无新行、磁盘文件被清理', async () => {
     const before = { rows: countPhotos(), files: storageFiles() };
-    vi.mocked(insertReview).mockImplementationOnce(() => {
+    vi.mocked(insertContentReview).mockImplementationOnce(() => {
       throw new Error('forced review failure');
     });
     const buffer = await jpeg(320, 240);
