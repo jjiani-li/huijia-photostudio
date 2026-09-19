@@ -128,4 +128,26 @@ describe('useJobPolling · 规则 ⑤ 错误不吞 + 卸载即停', () => {
     expect(fetchJob).not.toHaveBeenCalled();
     expect(p.getState().phase).toBe('idle');
   });
+
+  it('enabled 读最新值：false→true 后 start() 能生效（不把 enabled 钉死在首帧）', () => {
+    vi.useFakeTimers();
+    const fetchJob = vi.fn(async (): Promise<Job> => ({ status: 'running' }));
+    let enabled = false;
+    const p = createJobPoller<Job>({
+      fetchJob,
+      getStatus: (job) => job.status,
+      terminalStatuses: ['succeeded', 'failed'],
+      intervalMs: 1000,
+      timeoutMs: 10_000,
+      get enabled() {
+        return enabled;
+      },
+    });
+    p.start();
+    expect(fetchJob).not.toHaveBeenCalled();
+    enabled = true;
+    p.start();
+    expect(fetchJob).toHaveBeenCalledTimes(1);
+    p.stop();
+  });
 });

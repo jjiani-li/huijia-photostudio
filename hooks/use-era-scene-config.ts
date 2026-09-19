@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { apiRequest, toErrorNotice } from '../src/shared/api-client';
+import { useApiRequest } from './use-api-request';
+import { apiRequest, type ApiNotice } from '../src/shared/api-client';
 import type { EraSceneConfig } from '../src/shared/types';
 
 /**
@@ -36,25 +36,10 @@ export const loadEraSceneConfig = (): Promise<EraSceneConfig> => {
 export interface EraSceneConfigState {
   config: EraSceneConfig | null;
   loading: boolean;
-  error: { code: string; message: string } | null;
+  error: ApiNotice | null;
 }
 
 export function useEraSceneConfig(): EraSceneConfigState {
-  const [state, setState] = useState<EraSceneConfigState>({ config: null, loading: true, error: null });
-
-  useEffect(() => {
-    let cancelled = false;
-    loadEraSceneConfig()
-      .then((config) => {
-        if (!cancelled) setState({ config, loading: false, error: null });
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setState({ config: null, loading: false, error: toErrorNotice(err) });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return state;
+  const { data, error, loading } = useApiRequest(loadEraSceneConfig);
+  return { config: data, loading, error };
 }

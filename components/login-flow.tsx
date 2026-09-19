@@ -3,36 +3,21 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { ApiClientError, apiRequest, toErrorNotice } from '../src/shared/api-client';
+import { ApiClientError, apiRequest, toErrorNotice, type ApiNotice } from '../src/shared/api-client';
 import type { RealNameStatus, User } from '../src/shared/types';
-import { ErrorNotice } from './error-notice';
+import { ErrorNotice, errorShape } from './error-notice';
+import { RealNamePanel } from './real-name-panel';
 
 /**
  * `/login` 的两段式流程（`docs/prd/pages/P00-设计基准与路由.md` §5.2）：
  * 验证码登录段 → 实名段。已登录且已实名 → 回 `next`；已登录未实名 → 直接实名段。
- * 端点与字段以 `spec/03-接口契约.md` §3.1 为准；错误文案一律取服务端 `message`（§9.1 不重写）。
+ * 端点与字段以 `docs/prd/spec/03-接口契约.md` §3.1 为准；错误文案一律取服务端 `message`（P00 §9.1 不重写）。
  */
-type Notice = { code: string; message: string };
-
-const INLINE_CODES = [
-  'CODE_INVALID',
-  'CODE_EXPIRED',
-  'CODE_RATE_LIMITED',
-  'INVALID_PARAM',
-  'INVALID_FILE_TYPE',
-  'FILE_TOO_LARGE',
-];
-
-function InlineError({ error }: { error: Notice | null }): ReactNode {
-  if (error === null || !INLINE_CODES.includes(error.code)) return null;
-  return <p className="mt-sm text-note text-danger">{error.message}</p>;
-}
-
 export function LoginFlow({ hasSession, next }: { hasSession: boolean; next: string }) {
   const router = useRouter();
   const [session, setSession] = useState(hasSession);
   const [checked, setChecked] = useState(false);
-  const [error, setError] = useState<Notice | null>(null);
+  const [error, setError] = useState<ApiNotice | null>(null);
 
   useEffect(() => {
     if (!session) return;
@@ -53,26 +38,28 @@ export function LoginFlow({ hasSession, next }: { hasSession: boolean; next: str
     };
   }, [session, next, router]);
 
-  if (!session) return <LoginPanel onLoggedIn={() => setSession(true)} error={error} setError={setError} />;
+  if (!session) return <LoginPanel onLoggedIn={() => setSession(true)} />;
   if (!checked) return <p className="text-note text-ink-soft">正在确认登录状态…</p>;
-  return <RealNamePanel onDone={() => router.replace(next)} error={error} setError={setError} />;
+  return (
+    <>
+      {error !== null ? (
+        <div className="mb-lg">
+          <ErrorNotice error={error} />
+        </div>
+      ) : null}
+      <RealNamePanel onDone={() => router.replace(next)} />
+    </>
+  );
 }
 
-function LoginPanel({
-  onLoggedIn,
-  error,
-  setError,
-}: {
-  onLoggedIn: () => void;
-  error: Notice | null;
-  setError: (e: Notice | null) => void;
-}): ReactNode {
+function LoginPanel({ onLoggedIn }: { onLoggedIn: () => void }): ReactNode {
   const [identifier, setIdentifier] = useState('');
   const [code, setCode] = useState('');
   const [sent, setSent] = useState(false);
   const [devCode, setDevCode] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<ApiNotice | null>(null);
 
   useEffect(() => {
     if (!cooldown) return;
@@ -80,12 +67,11 @@ function LoginPanel({
     return () => clearTimeout(timer);
   }, [cooldown]);
 
+  // 输入级错误贴输入框下方；可重试类（PROVIDER_* / STORAGE_ERROR / INTERNAL）走 ErrorNotice（P00 §5.2、§8）。
+  const boxed = error !== null && errorShape(error.code).retryable;
+
   const requestCode = async (): Promise<void> => {
     setError(null);
-    if (identifier.trim() === '') {
-      setError({ code: 'INVALID_PARAM', message: '请先填手机号或邮箱' });
-      return;
-    }
     setBusy(true);
     try {
       const res = await apiRequest<{ sent: boolean; expiresInSec: number; devCode?: string }>(
@@ -139,7 +125,7 @@ function LoginPanel({
       <button
         type="button"
         onClick={() => void requestCode()}
-        disabled={busy || cooldown}
+        disabled={busy || cooldown || identifier.trim() === ''}
         className="mt-md rounded-md border border-primary px-lg py-md text-note text-primary disabled:border-border disabled:text-ink-soft"
       >
         {cooldown ? '稍等一下' : '获取验证码'}
@@ -161,7 +147,6 @@ function LoginPanel({
             onChange={(e) => setCode(e.target.value)}
             className="mt-sm w-full rounded-md border border-border bg-surface px-lg py-md text-body"
           />
-          <InlineError error={error} />
           <button
             type="button"
             onClick={() => void login()}
@@ -171,84 +156,16 @@ function LoginPanel({
             登录
           </button>
         </>
-      ) : (
-        <InlineError error={error} />
-      )}
+      ) : null}
 
-      {error !== null && !INLINE_CODES.includes(error.code) ? (
+      {error !== null && !boxed ? <p className="mt-sm text-note text-danger">{error.message}</p> : null}
+      {boxed ? (
         <div className="mt-md">
           <ErrorNotice error={error} />
         </div>
       ) : null}
 
       <p className="mt-2xl text-micro text-ink-soft">我们不会把你的照片用在别的地方。</p>
-    </section>
-  );
-}
-
-function RealNamePanel({
-  onDone,
-  error,
-  setError,
-}: {
-  onDone: () => void;
-  error: Notice | null;
-  setError: (e: Notice | null) => void;
-}): ReactNode {
-  const [realName, setRealName] = useState('');
-  const [idNumber, setIdNumber] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const submit = async (): Promise<void> => {
-    setError(null);
-    setBusy(true);
-    try {
-      await apiRequest<{ realNameStatus: RealNameStatus }>('/api/me/realname', {
-        method: 'POST',
-        body: { realName: realName.trim(), idNumber: idNumber.trim() },
-      });
-      onDone();
-    } catch (err) {
-      setError(toErrorNotice(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <section className="animate-fade-in">
-      <h1 className="font-serif text-title text-ink">完成实名认证</h1>
-      <p className="mt-md text-note text-ink-soft">按你的证件信息填写，我们只保存校验用的值。</p>
-
-      <label className="mt-xl block text-note text-ink" htmlFor="realName">
-        真实姓名
-      </label>
-      <input
-        id="realName"
-        value={realName}
-        onChange={(e) => setRealName(e.target.value)}
-        className="mt-sm w-full rounded-md border border-border bg-surface px-lg py-md text-body"
-      />
-
-      <label className="mt-xl block text-note text-ink" htmlFor="idNumber">
-        证件号
-      </label>
-      <input
-        id="idNumber"
-        value={idNumber}
-        onChange={(e) => setIdNumber(e.target.value)}
-        className="mt-sm w-full rounded-md border border-border bg-surface px-lg py-md text-body"
-      />
-
-      <InlineError error={error} />
-      <button
-        type="button"
-        onClick={() => void submit()}
-        disabled={busy}
-        className="mt-md rounded-pill bg-primary px-xl py-md text-note text-background disabled:opacity-60"
-      >
-        提交
-      </button>
     </section>
   );
 }

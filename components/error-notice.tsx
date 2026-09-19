@@ -2,16 +2,17 @@
 
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import type { ApiNotice } from '../src/shared/api-client';
 import { ERROR_CODES } from '../src/shared/types';
 
 /**
- * `ErrorNotice`（`docs/prd/pages/P00-设计基准与路由.md` §8）：`spec/03-接口契约.md` §5 错误码在
+ * `ErrorNotice`（`docs/prd/pages/P00-设计基准与路由.md` §8）：`docs/prd/spec/03-接口契约.md` §5 错误码在
  * 前端的**唯一落点**。主文案**直接用服务端 `error.message`**（前端不重写）；未知 `code` → 按 `INTERNAL`。
  * worker 未存活提示不走这里（它不是 API 错误，见 `provider-badge.tsx` 的 `WorkerNotice`）。
  */
 export interface ErrorNoticeProps {
-  error: { code: string; message: string } | null;
-  /** `page` 占满内容区；`inline` 贴触发控件下方。缺省按错误码推导（§8 表）。 */
+  error: ApiNotice | null;
+  /** `page` 占满内容区；`inline` 贴触发控件下方。缺省按错误码推导（同文档 §8 表）。 */
   variant?: 'inline' | 'page';
   /** 不传则不显示重试按钮。 */
   onRetry?: () => void;

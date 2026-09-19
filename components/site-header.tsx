@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
 import { apiRequest } from '../src/shared/api-client';
+import { useApiRequest } from '../hooks/use-api-request';
 import { useHealth } from '../hooks/use-health';
 import type { Quota, User } from '../src/shared/types';
 import { ProviderBadge } from './provider-badge';
@@ -17,23 +17,11 @@ interface MeResponse {
   quota: Quota;
 }
 
+const loadMe = (): Promise<MeResponse> => apiRequest<MeResponse>('/api/me');
+
 export function SiteHeader() {
   const health = useHealth();
-  const [me, setMe] = useState<MeResponse | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    apiRequest<MeResponse>('/api/me')
-      .then((data) => {
-        if (!cancelled) setMe(data);
-      })
-      .catch(() => {
-        /* 额度取不到不影响导航，静默降级 */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const { data: me } = useApiRequest(loadMe);
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-xl">

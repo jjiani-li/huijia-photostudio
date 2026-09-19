@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { toErrorNotice } from '../src/shared/api-client';
+import { toErrorNotice, type ApiNotice } from '../src/shared/api-client';
 
 /**
- * 轮询 Hook（`docs/prd/pages/P00-设计基准与路由.md` §7、`spec/03-接口契约.md` §2.1）。
+ * 轮询 Hook（`docs/prd/pages/P00-设计基准与路由.md` §7、`docs/prd/spec/03-接口契约.md` §2.1）。
  * 六条硬规则：只排下一次不叠加、`inFlight` 并发护栏、终止即停、超时不取消能力（`refreshNow()` 可续）、
  * 错误不吞、终态不再轮询（第 ⑥ 条由调用方保证：只对非终态 id 传入 `enabled=true`）。
  *
@@ -31,7 +31,7 @@ export interface JobPollingState<T> {
   phase: PollPhase;
   jobStatus: string | null;
   elapsedMs: number;
-  error: { code: string; message: string } | null;
+  error: ApiNotice | null;
   refreshNow: () => void;
 }
 
@@ -151,7 +151,10 @@ export function useJobPolling<T>(options: JobPollingOptions<T>): JobPollingState
     terminalStatuses: options.terminalStatuses,
     intervalMs: options.intervalMs,
     timeoutMs: options.timeoutMs,
-    enabled: options.enabled,
+    // `enabled` 用 getter 读最新值：poller 只建一次，不能在首帧把 `enabled` 钉死（否则 false→true 永不轮询）。
+    get enabled() {
+      return optionsRef.current.enabled;
+    },
   });
   const poller = pollerRef.current;
 

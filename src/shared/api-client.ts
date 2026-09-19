@@ -26,6 +26,12 @@ export interface ApiRequestOptions {
   signal?: AbortSignal;
 }
 
+/** `ErrorNotice` 消费的 `{ code, message }`（`docs/prd/pages/P00-设计基准与路由.md` §8）。 */
+export interface ApiNotice {
+  code: string;
+  message: string;
+}
+
 const asError = (envelope: unknown, status: number): ApiClientError => {
   const error = (envelope as ApiError | null)?.error;
   return new ApiClientError(
@@ -56,7 +62,13 @@ export const apiRequest = async <T>(path: string, options: ApiRequestOptions = {
 };
 
 /** 任意异常 → `ErrorNotice` 需要的 `{ code, message }`（非 `ApiClientError` 一律按 `INTERNAL`）。 */
-export const toErrorNotice = (err: unknown): { code: string; message: string } =>
+export const toErrorNotice = (err: unknown): ApiNotice =>
   err instanceof ApiClientError
     ? { code: err.code, message: err.message }
     : { code: 'INTERNAL', message: err instanceof Error ? err.message : '请求失败' };
+
+/** `INVALID_PARAM` 的 `details.fields` 键名（只用于高亮对应控件，`docs/prd/spec/03-接口契约.md` §1.3）。 */
+export const getFieldNames = (details: unknown): string[] => {
+  const fields = (details as { fields?: Record<string, unknown> } | undefined)?.fields;
+  return fields === undefined ? [] : Object.keys(fields);
+};
