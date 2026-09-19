@@ -1,5 +1,5 @@
 import { getDb } from '../connection';
-import type { Iso } from '../../../shared/types';
+import type { ConsentScope, Iso } from '../../../shared/types';
 
 /**
  * `consents` 表 SQL（`docs/prd/spec/01-领域模型与数据库.md` §3.11）。
@@ -42,7 +42,7 @@ const toConsent = (row: ConsentRow): ConsentRecord => ({
 export const ensureActive = (input: {
   userId: number;
   anchorId: number | null;
-  scope: string;
+  scope: ConsentScope;
   agreedAt: Iso;
 }): ConsentRecord => {
   const db = getDb();
@@ -69,7 +69,7 @@ export const ensureActive = (input: {
   }).immediate();
 };
 
-export const hasActiveScope = (userId: number, scope: string): boolean =>
+export const hasActiveScope = (userId: number, scope: ConsentScope): boolean =>
   getDb()
     .prepare('SELECT 1 FROM consents WHERE user_id = ? AND scope = ? AND revoked_at IS NULL LIMIT 1')
     .get(userId, scope) !== undefined;
@@ -98,7 +98,7 @@ export const revokeByAnchor = (anchorId: number, revokedAt: Iso): void => {
  * 不删行、不改 `agreed_at`，只写 `revoked_at`；返回被吊销的行数。
  * 入口只有 `anchorService.revokeConsents`（无端点、无 UI）。
  */
-export const revokeByScope = (userId: number, scope: string, revokedAt: Iso): number =>
+export const revokeByScope = (userId: number, scope: ConsentScope, revokedAt: Iso): number =>
   getDb()
     .transaction(() =>
       getDb()

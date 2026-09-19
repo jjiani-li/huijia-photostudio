@@ -239,36 +239,39 @@ export const getAnchor = (userId: number, anchorId: number): Anchor => {
  * → `409 ANCHOR_NOT_CONFIRMED`（复用「锚点不可用」语义）。
  */
 export const retryAnchor = (userId: number, anchorId: number): Anchor => {
-  const previous = findByIdForUser(userId, anchorId);
-  if (previous === null) throw appError('ANCHOR_NOT_FOUND');
-  if (previous.status !== 'succeeded' && previous.status !== 'failed') {
-    throw appError('ANCHOR_NOT_CONFIRMED');
-  }
+  const record = getDb()
+    .transaction(() => {
+      // ①②：归属与终态校验与 INSERT 在**同一排他事务**内（`spec/04-技术基线与目录结构.md` §4.3）。
+      const previous = findByIdForUser(userId, anchorId);
+      if (previous === null) throw appError('ANCHOR_NOT_FOUND');
+      if (previous.status !== 'succeeded' && previous.status !== 'failed') {
+        throw appError('ANCHOR_NOT_CONFIRMED');
+      }
 
-  const createdAt = nowIso();
-  const record = getDb().transaction(() => {
-    const inserted = insert({
-      userId,
-      inputPhotoIds: previous.inputPhotoIds,
-      preprocessedPhotoId: previous.preprocessedPhotoId,
-      status: 'queued',
-      attempt: previous.attempt + 1,
-      model: arkVisionModel(),
-      promptVersion: ANCHOR_PROMPT_VERSION,
-      quality: previous.quality,
-      createdAt,
-    });
-    audit(
-      {
-        action: 'anchor.extract',
+      const createdAt = nowIso();
+      const inserted = insert({
         userId,
-        target: `anchor:${inserted.id}`,
-        meta: { retryOf: previous.id, attempt: inserted.attempt },
-      },
-      createdAt,
-    );
-    return inserted;
-  })();
+        inputPhotoIds: previous.inputPhotoIds,
+        preprocessedPhotoId: previous.preprocessedPhotoId,
+        status: 'queued',
+        attempt: previous.attempt + 1,
+        model: arkVisionModel(),
+        promptVersion: ANCHOR_PROMPT_VERSION,
+        quality: previous.quality,
+        createdAt,
+      });
+      audit(
+        {
+          action: 'anchor.extract',
+          userId,
+          target: `anchor:${inserted.id}`,
+          meta: { retryOf: previous.id, attempt: inserted.attempt },
+        },
+        createdAt,
+      );
+      return inserted;
+    })
+    .immediate();
 
   return toAnchorDto(record, loadAnchorPhotos(userId, record));
 };
@@ -287,7 +290,7 @@ export const confirmAnchor = (
     // ①②：归属与存在性（「不存在」「他人」不区分）→ 404；可用性 → 409。
     const record = findByIdForUser(userId, anchorId);
     if (record === null) throw appError('ANCHOR_NOT_FOUND');
-    if (record.status !== 'succeeded' || record.anchorText === null) {
+    if (record.status !== 'succeeded' || record.anchorText === null || record.anchorText === '') {
       throw appError('ANCHOR_NOT_CONFIRMED');
     }
 
@@ -321,7 +324,7 @@ export const confirmAnchor = (
     const updated = findByIdForUser(userId, anchorId);
     if (updated === null) throw appError('INTERNAL', { reason: 'confirm 后读回失败' });
     return { anchor: toAnchorDto(updated, loadAnchorPhotos(userId, updated)), consents: [...CONSENT_SCOPES] };
-  })();
+  }).immediate();
 };
 
 /**
@@ -355,5 +358,5 @@ export const deleteAnchor = (params: {
       at,
     );
     return { ok: true as const, cascaded };
-  })();
+  }).immediate();
 };

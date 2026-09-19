@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getDb } from '../src/server/db/connection';
 import { hardDeleteAnchor, insert as insertAnchor } from '../src/server/db/repositories/anchors';
+import { readFixture } from '../src/server/ark/fixtures';
 import { confirmAnchor, revokeConsents } from '../src/server/domain/anchorService';
 import { assertAnchorGeneratable } from '../src/server/domain/generationService';
 import { AppError } from '../src/server/domain/errors';
@@ -160,21 +161,10 @@ const cleanups: Array<() => void> = [];
 // `SEC-01` / `SEC-02` / `SEC-03` / `SEC-09` 全部进程内直连 domain 层（确认 / 授权 / 守卫），不需 HTTP；
 // `POST /api/generations` 落成后（`tickets/T09`），`SEC-01` / `SEC-03` 再转成端到端形态。
 const DEV_USER = 1;
-const ANCHOR_TEXT = '甲'.repeat(60);
-const ANCHOR_FEATURES = {
-  gender: '男',
-  ageRange: '70-80岁',
-  hair: '灰白短寸',
-  faceShape: '方圆脸',
-  forehead: '宽阔',
-  eyebrows: '稀疏',
-  eyes: '单眼皮',
-  nose: '鼻头圆润',
-  mouth: '薄唇',
-  skin: '偏黄',
-  distinctive: '无',
-  build: '瘦高',
-};
+/** 锚点样本取自 mock 的成功 fixture（与 `routes.test.ts` 同一事实源）。 */
+const ANCHOR_SAMPLE = readFixture<{ anchorText: string; features: Record<string, string> }>(
+  'ark/anchor-extract.json',
+);
 
 /** 执行一个应抛错的调用，返回错误码（`AppError.code`）或 `'NO_THROW'`。 */
 const codeOfThrow = (fn: () => void): string => {
@@ -201,7 +191,7 @@ const makeSucceededAnchor = (): number => {
   }).id;
   getDb()
     .prepare('UPDATE identity_anchors SET anchor_text = ?, features_json = ?, finished_at = ? WHERE id = ?')
-    .run(ANCHOR_TEXT, JSON.stringify(ANCHOR_FEATURES), nowIso(), id);
+    .run(ANCHOR_SAMPLE.anchorText, JSON.stringify(ANCHOR_SAMPLE.features), nowIso(), id);
   cleanups.push(() => {
     getDb().prepare('DELETE FROM consents WHERE anchor_id = ?').run(id);
     getDb().prepare('DELETE FROM audit_logs WHERE target = ?').run(`anchor:${id}`);
