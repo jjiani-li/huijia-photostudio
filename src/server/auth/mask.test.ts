@@ -40,8 +40,13 @@ describe('maskIdentifier / toApiUser', () => {
       phone: '13800000000',
       email: null,
       nickname: 'DEV_USER',
+      realName: '开发用户',
+      idHash: 'dev-user-placeholder-hash',
       status: 1,
+      dailyImageQuota: 20,
       createdAt: '2026-01-01T00:00:00Z',
+      lastLoginAt: null,
+      verifiedAt: '2026-01-01T00:00:00Z',
     });
     expect(user).toEqual({
       id: 1,

@@ -1,4 +1,5 @@
 import type { User } from '../../shared/types';
+import type { UserRecord } from '../db/repositories/users';
 
 /**
  * 手机号 / 邮箱脱敏（`docs/prd/modules/M08-账号历史与彻底删除.md` §2.1、§3.1）。
@@ -28,15 +29,8 @@ export const maskEmail = (email: string | null): string | null => {
 export const maskIdentifier = (identifier: string | null): string | null =>
   identifier === null ? null : identifier.includes('@') ? maskEmail(identifier) : maskPhone(identifier);
 
-/** `users` 行 → API 的 `User`（`spec/03-接口契约.md` §4）；`phone` / `email` 一律脱敏。 */
-export const toApiUser = (user: {
-  id: number;
-  phone: string | null;
-  email: string | null;
-  nickname: string;
-  status: number;
-  createdAt: string;
-}): User => ({
+/** `users` 行 → API 的 `User`（`spec/03-接口契约.md` §4）；`phone` / `email` 一律脱敏，实名三列不下发。 */
+export const toApiUser = (user: UserRecord): User => ({
   id: user.id,
   phone: maskPhone(user.phone),
   email: maskEmail(user.email),

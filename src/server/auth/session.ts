@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { appError } from '../domain/errors';
-import { nowIso } from '../domain/time';
+import { isoMinutesFromNow, nowIso } from '../domain/time';
 import { findById } from '../db/repositories/users';
 import { findActiveByTokenHash, insert as insertSession, revokeByTokenHash } from '../db/repositories/sessions';
 import type { SessionUser } from '../../shared/types';
@@ -24,8 +24,8 @@ const SID_RE = /^[A-Za-z0-9_-]{43}$/;
 /** 服务端只存 `sha256(token)` 十六进制小写；明文只在响应里出现一次（`modules/M08` §2.1）。 */
 export const hashToken = (token: string): string => createHash('sha256').update(token).digest('hex');
 
-/** 从请求的 `cookie` 头取 `sid`（NextRequest 与测试里的 `Request` 都带 `headers`）。 */
-const readSid = (req?: Request): string | null => {
+/** 从请求的 `cookie` 头取 `sid`（NextRequest 与测试里的 `Request` 都带 `headers`）；登出用它取明文 token。 */
+export const readSessionToken = (req?: Request): string | null => {
   const header = req?.headers?.get('cookie');
   if (header === undefined || header === null) return null;
   for (const part of header.split(';')) {
@@ -40,7 +40,7 @@ const readSid = (req?: Request): string | null => {
  * cookie 缺失或格式非法 → `null`（**不查库**）；否则 `sessions` 活跃行（未吊销且未过期）→ `users.status=1`。
  */
 export const getSessionUser = (req?: Request): SessionUser | null => {
-  const token = readSid(req);
+  const token = readSessionToken(req);
   if (token === null || !SID_RE.test(token)) return null;
   const session = findActiveByTokenHash(hashToken(token), nowIso());
   if (session === null) return null;
@@ -65,7 +65,7 @@ export const requireUser = (req?: Request): SessionUser => {
 /** 登录签发：`randomBytes(32).toString('base64url')`（43 字符）→ sha256 落库，返回明文与新会话 token。 */
 export const createSession = (userId: number): { token: string; expiresAt: string } => {
   const token = randomBytes(32).toString('base64url');
-  const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000).toISOString();
+  const expiresAt = isoMinutesFromNow(SESSION_TTL_SECONDS / 60);
   insertSession({ userId, tokenHash: hashToken(token), expiresAt, createdAt: nowIso() });
   return { token, expiresAt };
 };
@@ -75,6 +75,3 @@ export const destroySession = (token: string | null): void => {
   if (token === null) return;
   revokeByTokenHash(hashToken(token), nowIso());
 };
-
-/** 登出清 cookie 用：从请求里取明文 token（与 `getSessionUser` 同一读取口径）。 */
-export const readSessionToken = (req?: Request): string | null => readSid(req);

@@ -10,5 +10,9 @@ export const nowIso = (): string => new Date().toISOString();
 export const isoMinutesAgo = (minutes: number): string =>
   new Date(Date.now() - minutes * 60_000).toISOString();
 
+/** `nowIso()` 的派生入口：N 分钟后的 UTC ISO（验证码有效期、会话 `expires_at`）。 */
+export const isoMinutesFromNow = (minutes: number): string =>
+  new Date(Date.now() + minutes * 60_000).toISOString();
+
 /** 额度日的「今天」，UTC：`YYYY-MM-DD` */
 export const dayKey = (): string => nowIso().slice(0, 10);

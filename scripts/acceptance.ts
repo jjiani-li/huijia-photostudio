@@ -53,6 +53,7 @@ import { GET as getEraSceneConfig } from '../app/api/config/era-scene/route';
 import { GET as getHealth } from '../app/api/health/route';
 import { GET as getMe } from '../app/api/me/route';
 import { POST as postAuthCode } from '../app/api/auth/code/route';
+import { POST as postPhoto } from '../app/api/photos/route';
 
 interface CheckResult {
   ok: boolean;
@@ -467,14 +468,30 @@ checks.push(
   {
     id: 'API-03',
     run: async () => {
-      const res = await getMe(new Request('http://localhost/api/me') as unknown as NextRequest, {
-        params: Promise.resolve({}),
-      });
-      const body = (await res.json()) as { error?: { code?: string } };
+      const unauth = (url: string, init: RequestInit = {}): NextRequest =>
+        new Request(url, init) as unknown as NextRequest;
+      const calls = [
+        { name: '/api/me', res: await getMe(unauth('http://localhost/api/me'), { params: Promise.resolve({}) }) },
+        {
+          name: '/api/config/era-scene',
+          res: await getEraSceneConfig(unauth('http://localhost/api/config/era-scene'), { params: Promise.resolve({}) }),
+        },
+        {
+          name: 'POST /api/photos',
+          res: await postPhoto(unauth('http://localhost/api/photos', { method: 'POST' }), { params: Promise.resolve({}) }),
+        },
+      ];
+      const results = await Promise.all(
+        calls.map(async (call) => ({
+          name: call.name,
+          status: call.res.status,
+          code: ((await call.res.json()) as { error?: { code?: string } }).error?.code ?? '',
+        })),
+      );
       return {
-        ok: res.status === 401 && body.error?.code === 'UNAUTHENTICATED',
-        expected: '未登录访问 /api/me → 401 UNAUTHENTICATED',
-        actual: `${res.status} ${body.error?.code ?? ''}`,
+        ok: results.every((r) => r.status === 401 && r.code === 'UNAUTHENTICATED'),
+        expected: '3 个受保护端点未登录 → 401 UNAUTHENTICATED',
+        actual: results.map((r) => `${r.name}:${r.status}/${r.code}`).join('  '),
       };
     },
   },
@@ -489,12 +506,13 @@ checks.push(
       };
       const phone = body.user?.phone ?? null;
       const serialized = JSON.stringify(body);
-      const masked = phone === null || phone.includes('*');
+      // 钉死脱敏后的形状（DEV_USER 手机号 13800000000），不能只判"含 * 或 null"。
+      const masked = phone === '138****0000';
       const noPlain = !serialized.includes('13800000000');
       const quotaOk = typeof body.quota?.limit === 'number';
       return {
         ok: res.status === 200 && masked && noPlain && quotaOk,
-        expected: '200；user.phone 含 * 且无明文；quota.limit 为数值',
+        expected: '200；user.phone === 138****0000 且无明文；quota.limit 为数值',
         actual: `status=${res.status} phone=${String(phone)} 无明文=${noPlain} limit=${String(body.quota?.limit)}`,
       };
     },

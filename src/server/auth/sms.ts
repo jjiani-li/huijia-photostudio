@@ -17,11 +17,14 @@ export class ConsoleSmsSender implements SmsSender {
   }
 }
 
+/** `SMS_PROVIDER` 的当前取值（缺省 `console`）——本文件内与 `exposeDevCode` 共用同一读取口径。 */
+const smsProvider = (): string => process.env.SMS_PROVIDER ?? 'console';
+
 let instance: SmsSender | null = null;
 
 /** `SMS_PROVIDER`（默认 `console`）→ 发送器单例；`real` 未实现，抛 `INTERNAL`。 */
 export const getSmsSender = (): SmsSender => {
-  if ((process.env.SMS_PROVIDER ?? 'console') === 'real') {
+  if (smsProvider() === 'real') {
     throw appError('INTERNAL', { reason: 'SMS_PROVIDER=real 本期无真实通道' });
   }
   if (instance === null) instance = new ConsoleSmsSender();
@@ -34,7 +37,7 @@ export const resetSmsSender = (): void => {
 };
 
 /** `devCode` 是否可下发——**仅** `SMS_PROVIDER=console`（`spec/03-接口契约.md` §3.1、`SEC-07`）。 */
-export const exposeDevCode = (): boolean => (process.env.SMS_PROVIDER ?? 'console') === 'console';
+export const exposeDevCode = (): boolean => smsProvider() === 'console';
 
 /** `SMS_PROVIDER=console` 时的万能验证码（`modules/M08` §2.1；仍需存在未消费且未过期的记录）。 */
 export const devLoginCode = (): string => process.env.DEV_LOGIN_CODE ?? '000000';

@@ -2,15 +2,17 @@ import { randomInt, timingSafeEqual } from 'node:crypto';
 import { getDb } from '../db/connection';
 import { audit } from '../security/audit';
 import { appError } from './errors';
-import { nowIso } from './time';
+import { isoMinutesAgo, isoMinutesFromNow, nowIso } from './time';
 import { normalizeIdentifier, type IdentifierChannel } from '../auth/identifier';
 import { assertDevCodeAllowed, devLoginCode, exposeDevCode, getSmsSender } from '../auth/sms';
 import { createSession, destroySession, hashToken, readSessionToken } from '../auth/session';
-import { maskIdentifier } from '../auth/mask';
+import { maskIdentifier, toApiUser } from '../auth/mask';
+import { readQuota, type QuotaView } from '../security/quota';
 import * as loginCodes from '../db/repositories/loginCodes';
 import * as sessions from '../db/repositories/sessions';
 import * as users from '../db/repositories/users';
 import type { UserRecord } from '../db/repositories/users';
+import type { User } from '../../shared/types';
 
 /**
  * 验证码账号与会话的编排（`docs/prd/modules/M08-账号历史与彻底删除.md` §2.1）：
@@ -44,7 +46,7 @@ export const requestLoginCode = (params: {
 }): RequestCodeResult => {
   const identifier = normalizeIdentifier(params.identifier, params.channel);
   const now = nowIso();
-  const since = new Date(Date.now() - RATE_WINDOW_MS).toISOString();
+  const since = isoMinutesAgo(RATE_WINDOW_MS / 60_000);
   if (loginCodes.findRecentUnconsumed(identifier, since) !== null) throw appError('CODE_RATE_LIMITED');
 
   // `SMS_PROVIDER=real` 在 `getSmsSender()` 里抛 `INTERNAL`——先取发送器，避免留下无通道可发的码。
@@ -52,7 +54,7 @@ export const requestLoginCode = (params: {
   const code = randomInt(0, 1_000_000)
     .toString()
     .padStart(6, '0');
-  const expiresAt = new Date(Date.now() + CODE_TTL_SECONDS * 1000).toISOString();
+  const expiresAt = isoMinutesFromNow(CODE_TTL_SECONDS / 60);
 
   getDb().transaction(() => {
     loginCodes.insert({ identifier, code, purpose: 'login', expiresAt, createdAt: now });
@@ -140,4 +142,14 @@ export const logout = (req?: Request): void => {
   if (session !== null) {
     audit({ action: 'auth.logout', userId: session.userId, target: `user:${session.userId}` }, now);
   }
+};
+
+/**
+ * `GET /api/me` 的响应体（`docs/prd/spec/03-接口契约.md` §3.1、§4）：`user` 经 `mask.ts` 脱敏、
+ * `quota` 取 `readQuota()`（`tickets/T09` 下沉）。组装放这里，路由只做「鉴权 → 调 service → 封装」。
+ */
+export const readMe = (userId: number): { user: User; quota: QuotaView } => {
+  const user = users.findById(userId);
+  if (user === null) throw appError('UNAUTHENTICATED');
+  return { user: toApiUser(user), quota: readQuota(userId) };
 };
