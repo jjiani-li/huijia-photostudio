@@ -87,6 +87,18 @@ export const findNextQueuedId = (): number | null => {
   return row === undefined ? null : row.id;
 };
 
+/** claim（`spec/04-技术基线与目录结构.md` §4.6）：仅把 `queued` 推进到 `running`，`attempt` 不动。 */
+export const claimForRun = (id: number, startedAt: Iso): number =>
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `UPDATE prompt_reverse_jobs SET status = 'running', started_at = @startedAt
+           WHERE id = @id AND status = 'queued'`,
+        )
+        .run({ id, startedAt }).changes,
+    )();
+
 /**
  * 启动回收（§4.6）：陈旧 `running` 行退回 `queued`、`started_at = NULL`；
  * `attempt` 保持不变、`error_code` 不写（`ERR-02`）。返回命中行数。

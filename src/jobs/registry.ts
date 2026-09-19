@@ -14,9 +14,9 @@ import { anchorExtractHandler } from './handlers/anchorExtract';
  * 轮转顺序不因此改变。
  */
 export interface JobPayloads {
-  'anchor.extract': { anchorId: number };
-  generate: { generationId: number };
-  'reverse.prompt': { jobId: number };
+  'anchor.extract': { anchorId: number; signal: AbortSignal };
+  generate: { generationId: number; signal: AbortSignal };
+  'reverse.prompt': { jobId: number; signal: AbortSignal };
 }
 
 export type JobType = keyof JobPayloads;

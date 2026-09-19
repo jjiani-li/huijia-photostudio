@@ -1,6 +1,12 @@
 import { getDb } from '../connection';
-import { idArrayJson, objectJson, parseJsonColumn, parseRequiredJsonColumn } from '../json';
-import { eraCheckSchema, type EraCheck, type Iso } from '../../../shared/types';
+import { idArrayJson, parseJsonColumn, parseRequiredJsonColumn } from '../json';
+import {
+  eraCheckSchema,
+  generationParamsSchema,
+  type EraCheck,
+  type Generation,
+  type Iso,
+} from '../../../shared/types';
 
 /**
  * `generations` 表 SQL（`docs/prd/spec/01-领域模型与数据库.md` §3.9、状态机 §2.2）。
@@ -23,7 +29,7 @@ export interface GenerationRecord {
   eraPackVersion: string;
   scenePackVersion: string;
   model: string;
-  params: unknown;
+  params: Generation['params'];
   requestedCount: number;
   status: GenerationStatus;
   attempt: number;
@@ -80,7 +86,7 @@ const toGeneration = (row: GenerationRow): GenerationRecord => ({
   eraPackVersion: row.era_pack_version,
   scenePackVersion: row.scene_pack_version,
   model: row.model,
-  params: parseRequiredJsonColumn(row.params_json, objectJson, 'generations.params_json'),
+  params: parseRequiredJsonColumn(row.params_json, generationParamsSchema, 'generations.params_json'),
   requestedCount: row.requested_count,
   status: row.status,
   attempt: row.attempt,
@@ -136,7 +142,7 @@ export interface InsertGenerationInput {
   eraPackVersion: string;
   scenePackVersion: string;
   model: string;
-  params: unknown;
+  params: Generation['params'];
   requestedCount: number;
   status: GenerationStatus;
   attempt: number;
@@ -200,6 +206,21 @@ export const findNextQueuedId = (): number | null => {
     .get() as { id: number } | undefined;
   return row === undefined ? null : row.id;
 };
+
+/**
+ * claim（`spec/04-技术基线与目录结构.md` §4.6，三张表同一写法）：仅把 `queued` 推进到 `running`，
+ * `attempt` 不动。返回 `changes`——`0` 表示没抢到，调用方必须放弃本轮。供 `tickets/T10` 的 handler 调用。
+ */
+export const claimForRun = (id: number, startedAt: Iso): number =>
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `UPDATE generations SET status = 'running', started_at = @startedAt
+           WHERE id = @id AND status = 'queued'`,
+        )
+        .run({ id, startedAt }).changes,
+    )();
 
 /**
  * 启动回收（§4.6）：`running` 且 `started_at` 早于阈值的行退回 `queued`、`started_at = NULL`；

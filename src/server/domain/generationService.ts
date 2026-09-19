@@ -45,6 +45,11 @@ export interface CreateGenerationInput {
   eraCode: string;
   sceneId: number;
   count: number;
+  /**
+   * `retryGeneration` 继承旧行 `params_json` 用（`spec/03-接口契约.md` §3.5、`modules/M06` §5.7）；
+   * `POST /api/generations` 不传，缺省时用本次拼装出来的 `params`。
+   */
+  paramsOverride?: Generation['params'];
 }
 
 /** 落库的拼装字段与 `generations` 行字段的合并（`insert` 的入参形状）。 */
@@ -66,7 +71,7 @@ const insertDraft = (
   eraPackVersion: draft.eraPackVersion,
   scenePackVersion: draft.scenePackVersion,
   model: draft.model,
-  params: draft.params,
+  params: input.paramsOverride ?? draft.params,
   requestedCount: input.count,
   status: 'queued',
   attempt: 0,
@@ -83,8 +88,9 @@ const insertDraft = (
  * - 事务用 `db.transaction(...).immediate()`（`BEGIN IMMEDIATE`），与 `pnpm worker` 抢同一把写锁。
  */
 export const createGeneration = (input: CreateGenerationInput): GenerationRecord => {
-  // ① 实名门槛（最先，未实名时不进入后续校验、不产生任何写操作；`RN-01`）。
-  if (users.findById(input.userId)?.verifiedAt === null) throw appError('REALNAME_REQUIRED');
+  // ① 实名门槛（最先，未实名时不进入后续校验、不产生任何写操作；`RN-01`）。用户不存在同样视为不可用。
+  const user = users.findById(input.userId);
+  if (user === null || user.verifiedAt === null) throw appError('REALNAME_REQUIRED');
 
   // ② 张数取值域。
   if (!(GENERATION_COUNTS as readonly number[]).includes(input.count)) throw appError('INVALID_PARAM');
@@ -97,9 +103,8 @@ export const createGeneration = (input: CreateGenerationInput): GenerationRecord
   // ④⑤⑥ 锚点归属 → 可用性 → 授权（顺序固定在 assertAnchorGeneratable 内）。
   assertAnchorGeneratable(input.userId, input.anchorId);
 
-  // ⑦ 额度预检（失败时不得留下 `generations` 行，`SEC-04`）。
-  assertQuotaAvailable(input.userId, input.count);
-
+  // ⑤ 的延伸：`anchor_text` 为空即锚点不可用 → `ANCHOR_NOT_CONFIRMED`，且**必须早于第 ⑦ 步额度**
+  // （M06 §5.1 的「顺序即契约」）。`buildGenerationDraft` 同时校验 size 这一内部不变量。
   const anchor = anchors.findByIdForUser(input.userId, input.anchorId);
   if (anchor === null) throw appError('ANCHOR_NOT_FOUND');
   const profile = config.getProfile(input.eraCode, input.sceneId);
@@ -109,6 +114,10 @@ export const createGeneration = (input: CreateGenerationInput): GenerationRecord
     scene,
     profile,
   });
+
+  // ⑦ 额度预检（失败时不得留下 `generations` 行，`SEC-04`）——必须在任何写操作之前，且排在锚点可用性之后。
+  assertQuotaAvailable(input.userId, input.count);
+
   const referencePhotoIds = anchor.preprocessedPhotoId === null ? [] : [anchor.preprocessedPhotoId];
   const record = insertDraft(input, draft, profile?.id ?? null, referencePhotoIds);
 
@@ -144,6 +153,8 @@ export const retryGeneration = (input: { userId: number; generationId: number })
     eraCode: existing.eraCode,
     sceneId: existing.sceneId,
     count: existing.requestedCount,
+    // `spec/03-接口契约.md` §3.5 / `modules/M06` §5.7：`params_json` 由旧行继承，prompt 与三个版本号重新拼装。
+    paramsOverride: existing.params,
   });
 };
 
@@ -187,7 +198,7 @@ export const toGenerationDto = (record: GenerationRecord): Generation => ({
   attempt: record.attempt,
   prompt: record.prompt,
   templateVersion: record.templateVersion,
-  params: record.params as Generation['params'],
+  params: record.params,
   error: toGenerationError(record.errorCode),
   createdAt: record.createdAt,
   finishedAt: record.finishedAt,

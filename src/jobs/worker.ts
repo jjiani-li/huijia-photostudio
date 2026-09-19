@@ -155,20 +155,21 @@ export const settleJobFailure = (input: JobFailureInput): 'requeued' | 'failed' 
 const bindHandler = (
   jobType: JobType,
   id: number,
+  signal: AbortSignal,
   handlers: JobHandlerMap,
 ): (() => Promise<void>) | undefined => {
   switch (jobType) {
     case 'anchor.extract': {
       const handler = handlers['anchor.extract'];
-      return handler === undefined ? undefined : () => handler({ anchorId: id });
+      return handler === undefined ? undefined : () => handler({ anchorId: id, signal });
     }
     case 'generate': {
       const handler = handlers['generate'];
-      return handler === undefined ? undefined : () => handler({ generationId: id });
+      return handler === undefined ? undefined : () => handler({ generationId: id, signal });
     }
     case 'reverse.prompt': {
       const handler = handlers['reverse.prompt'];
-      return handler === undefined ? undefined : () => handler({ jobId: id });
+      return handler === undefined ? undefined : () => handler({ jobId: id, signal });
     }
     default:
       return undefined;
@@ -199,7 +200,9 @@ export const processOne = async (
   const id = source.findNextQueuedId();
   if (id === null) return null;
 
-  const handler = bindHandler(source.jobType, id, options.handlers ?? JOB_HANDLERS);
+  // `spec/04-技术基线与目录结构.md` §4.6：handler 用 `AbortController` 包裹，超时即中止。
+  const controller = new AbortController();
+  const handler = bindHandler(source.jobType, id, controller.signal, options.handlers ?? JOB_HANDLERS);
   if (handler === undefined) return null;
 
   const jobTimeoutMs = options.jobTimeoutMs ?? WORKER_DEFAULTS.jobTimeoutSeconds * 1_000;
@@ -221,6 +224,8 @@ export const processOne = async (
     const winner = await Promise.race([run, timeout]);
     if (winner === 'done') return { jobType: source.jobType, id, timedOut: false };
     log('warn', 'job timeout', { jobType: source.jobType, id, jobTimeoutMs });
+    // 通知支持 `signal` 的 handler（fetch 等）立刻停止；再按 `onTimeout` 兜底落库。
+    controller.abort();
     try {
       source.onTimeout?.(id);
     } catch (err) {

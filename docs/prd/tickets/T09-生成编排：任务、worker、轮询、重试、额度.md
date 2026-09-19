@@ -63,3 +63,15 @@ pnpm test && pnpm check:acceptance
 **`ERR-01` / `ERR-05` 的端到端未跑**：两者的判定（`fixtures/ark/timeout.json` → `PROVIDER_TIMEOUT` 且 `attempt=1`；`fixtures/ark/model-not-open.json` → `PROVIDER_ERROR` 且 `attempt=0`）走的是"生成 handler 落终态 + 自动重试"这条链，而 `src/jobs/handlers/generate.ts` 归 `tickets/T10`（见 `tickets/T10` §3），按本条的边界**不在 T09 落地**，故 `pnpm check:acceptance` 里这两项仍待 T10 接上，本条不代跑。T09 改为在 `src/jobs/worker.test.ts` 用注入口的 stub handler 单测同一套机制：claim 连续两次第二次 `changes === 0`、三张表的 `requeueStale` 把陈旧 `running` 拉回 `queued`（`attempt` 不变，`ERR-02`）、以及"可重试 → `attempt=1` 后再失败落 `failed`"与"不可重试 → 直接 `failed` 且 `attempt` 保持 0"两条状态转移。
 
 **验证**（四道闸门全绿）：`pnpm test` 205 个用例通过（24 个测试文件）；`pnpm check`（`tsc --noEmit` + `eslint .`）零错误；`pnpm check:docs` 的 17 条断言全绿；`pnpm test:docs` 全通过；`pnpm migrate && pnpm seed && pnpm check:acceptance` 的 28 条断言全通过（0 失败 / 0 跳过），新增 `SEC-04`、`SEC-05`、`E2E-04`、`E2E-09`、`ERR-02`、`ERR-04`、`DB-07` 七条，每条都在进程内直连 domain / 端点并自带清理（额度计数按跑前快照回滚、心跳文件跑完删除）。
+
+### 两轴评审收口（`/code-review`，Standards + Spec，基线 `6d0391e`）
+
+1. **校验顺序**：`buildGenerationDraft`（其中含 `anchor_text` 为空的 `ANCHOR_NOT_CONFIRMED`）原先排在 `assertQuotaAvailable` 之后，导致「锚点文本为空 + 额度也不足」时错报 `QUOTA_EXCEEDED`——与 `modules/M06-生成编排.md` §5.1「顺序即契约」（第 5 步先于第 7 步）冲突。已把额度预检移到拼装之后，并加用例锁定该顺序。
+2. **未实名判定**：`users.findById()?.verifiedAt === null` 在用户不存在时得 `undefined !== null` 而放行。已改为 `user === null || user.verifiedAt === null` → `REALNAME_REQUIRED`。
+3. **worker 的 SQL 与时间**：`settleJobFailure` 原先把三表 `UPDATE` 以动态表名内联在 `src/jobs/`（违反「全部 SQL 收敛在 repository 层」）。已把 SQL 移回 `db/repositories`（`anchors.requeueForRetry` / `promptReverseJobs.requeueForRetry` / `markTerminalFailure`，`generations` 复用既有 `updateStatus`），worker 只做派发；启动回收的阈值时间改走 `domain/time.ts` 新增的 `isoMinutesAgo()`，不再在业务代码里直接 `new Date(...).toISOString()`。
+4. **超时中止**：`spec/04` §4.6 要求 handler 用 `AbortController` 包裹。`processOne` 现在创建 controller、把 `signal` 通过 `JobPayloads` 传入 handler，超时即 `controller.abort()` 并按 `onTimeout` 兜底落库（`T10` 的生成 handler 可据此中止 fetch）。
+5. **claim 三表同一写法**：补 `generations.claimForRun()` 与 `promptReverseJobs.claimForRun()`（`queued → running`，`attempt` 不动），供 `T10` / `T18` 的 handler 调用，与 `anchors.claimForRun` 对齐。
+6. **JSON 列边界**：`generations.params_json` 原先用 `objectJson` 泛解析、再在 DTO 处 `as Generation['params']` 强转（绕过 `spec/04` §4.3 的 zod 边界）。已新增 `shared/types.ts` 的 `generationParamsSchema`，repository 读回即过该 schema，DTO 不再强转。
+7. **retry 继承 `params_json`**：`spec/03-接口契约.md` §3.5 与 `modules/M06` §5.7 要求重试继承旧行 `params_json`。`createGeneration` 增加可选 `paramsOverride`，`retryGeneration` 传旧行 `params`；prompt 与三个版本号仍按 §5.7 重新拼装。已加用例。
+
+收口后复跑：`pnpm test` **207** 用例全绿（新增「第 5 步先于第 7 步」与「retry 继承 params」两条）；`pnpm check` 零错误；`pnpm check:acceptance` **28 passed**；`pnpm check:docs` / `pnpm test:docs` 全绿。

@@ -335,6 +335,14 @@ export const eraCheckSchema = z.object({
   model: z.string().nullable(),
 });
 
+/** `generations.params_json` 的边界校验（`spec/04` §4.3）：repository 读回时过这一份。 */
+export const generationParamsSchema = z.object({
+  size: z.string(),
+  outputFormat: z.enum(['png', 'jpeg']),
+  watermark: z.boolean(),
+  provider: z.enum(['mock', 'real']),
+});
+
 export const generationResultSchema = z.object({
   id: z.number().int(),
   photoId: z.number().int(),
@@ -359,12 +367,7 @@ export const generationSchema = z.object({
   attempt: z.number().int(),
   prompt: z.string(),
   templateVersion: z.string(),
-  params: z.object({
-    size: z.string(),
-    outputFormat: z.enum(['png', 'jpeg']),
-    watermark: z.boolean(),
-    provider: z.enum(['mock', 'real']),
-  }),
+  params: generationParamsSchema,
   error: anchorErrorSchema.nullable(),
   createdAt: z.string(),
   finishedAt: z.string().nullable(),

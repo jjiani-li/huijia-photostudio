@@ -269,6 +269,17 @@ describe('createGeneration 的 8 步校验序列（modules/M06 §5.1，顺序即
     expect(generationCount()).toBe(before);
   });
 
+  it('第 5 步（anchor_text 空）先于第 7 步：额度同样不足时报 ANCHOR_NOT_CONFIRMED，不报 QUOTA_EXCEEDED', () => {
+    const id = readyAnchor();
+    setAnchorText(id, null);
+    getDb().prepare('UPDATE users SET daily_image_quota = 1 WHERE id = 1').run();
+    try {
+      expect(codeOf(() => create(id, 2))).toBe('ANCHOR_NOT_CONFIRMED');
+    } finally {
+      getDb().prepare('UPDATE users SET daily_image_quota = 20 WHERE id = 1').run();
+    }
+  });
+
   it('第 6 步：photo_usage 不存在或已吊销 → CONSENT_REQUIRED', () => {
     const id = readyAnchor();
     expect(revokeConsents(1, 'photo_usage')).toBeGreaterThan(0);
@@ -467,5 +478,17 @@ describe('retryGeneration 的新建行语义（modules/M06 §5.7，E2E-09）', (
       expect(retryGeneration({ userId: 1, generationId: first.id }).status).toBe('queued');
       expect(codeOf(() => retryGeneration({ userId: 2, generationId: first.id }))).toBe('NOT_FOUND');
     }
+  });
+
+  it('params_json 由旧行继承，不按当前环境重算（spec/03-接口契约.md §3.5）', () => {
+    const id = readyAnchor();
+    const first = create(id, 2);
+    const inherited = { size: '2048x2048', outputFormat: 'png', watermark: true, provider: 'real' } as const;
+    getDb()
+      .prepare("UPDATE generations SET params_json = ?, status = 'succeeded' WHERE id = ?")
+      .run(JSON.stringify(inherited), first.id);
+
+    const second = retryGeneration({ userId: 1, generationId: first.id });
+    expect(second.params).toEqual(inherited);
   });
 });
