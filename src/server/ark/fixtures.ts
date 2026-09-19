@@ -6,8 +6,12 @@ import type { ArkErrorShape, ArkFailureKind } from './errors';
 /**
  * fixture 读取与回放选择（`docs/prd/spec/08-本地开发指南.md` §5.1）。
  * `fixtures/ark/*.json` 与 `fixtures/images/*` 是 mock 的本地替身数据。
+ *
+ * 路径由 `import.meta.url` 推导（不依赖 cwd）：**不能**写成 `new URL('../../../fixtures', import.meta.url)`
+ * ——webpack 会把它当静态资源去解析目录并报 `Can't resolve`（`pnpm build` / `pnpm dev` 直接失败）。
  */
-const FIXTURES_DIR = fileURLToPath(new URL('../../../fixtures', import.meta.url));
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const FIXTURES_DIR = path.resolve(MODULE_DIR, '../../../fixtures');
 
 const fixturePath = (rel: string): string => path.join(FIXTURES_DIR, rel);
 

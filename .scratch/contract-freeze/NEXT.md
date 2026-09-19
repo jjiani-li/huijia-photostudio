@@ -45,5 +45,5 @@ corepack pnpm check:docs / test:docs / test / check 与 check:acceptance，提�
 - `docs/提示词.md` 在工作树里显示为已修改：这是**先前的无关改动**（提示词原始素材），历次交付都没动它、也没提交，忽略即可。
 - `ERR-01` / `ERR-05` 已随 T10 补齐；`E2E-03` 随 T09 补齐。
 - `DEL-01`–`DEL-04` / `CMP-05` 随 T13 补齐；`/api/history` 的 `url` 带 `?w=400`、`deletePhoto` 对「已物理清理的行」按 `spec/03` §1.5 返 `200`（幂等）是 `modules/M08` §9 已收口的口径。
-- **`pnpm build` 目前红灯**（T14 发现）：`src/server/ark/fixtures.ts` 用 `new URL('../../../fixtures', import.meta.url)`，webpack 会静态解析该目录并失败。改 `path.resolve(process.cwd(), 'fixtures')` 后构建全绿（21 路由）。属 `tickets/T05` 的文件，按施工纪律 §3 未动，见 `tickets/T14` 的 `## Comments`。`pnpm dev` 访问 `/api/anchors*` 同样受影响。
+- **`pnpm build` 已随 `tickets/T05` 的 fixtures 路径修复转绿**（T14 会话发现、经人工同意修）：`src/server/ark/fixtures.ts` 不再用 `new URL('../../../fixtures', import.meta.url)`（webpack 会静态解析目录并失败），改为 `path.dirname(fileURLToPath(import.meta.url))` + `path.resolve(..., '../../../fixtures')`。构建 21 路由全绿。
 - 若干刻意延后项见各 ticket 的 `## Comments`（如 `DB-07` 已在 T09 接线；T06 锚点提取不自动重试是 `modules/M03` 的设计）。
