@@ -9,7 +9,8 @@ export default defineConfig({
       'src/**/*.test.ts',
       'app/**/*.test.{ts,tsx}',
       'hooks/**/*.test.ts',
-      'components/**/*.test.tsx',
+      // `components/` 下既有 `.tsx` 组件、也有纯逻辑 `.ts` 模块（如 `choose/selection.ts`）。
+      'components/**/*.test.{ts,tsx}',
     ],
   },
 });

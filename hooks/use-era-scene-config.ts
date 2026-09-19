@@ -37,9 +37,11 @@ export interface EraSceneConfigState {
   config: EraSceneConfig | null;
   loading: boolean;
   error: ApiNotice | null;
+  /** 「重新加载」（`pages/P02-年代与场景选择.md` §8）：失败时 `ErrorNotice` 的 `onRetry` 接它。 */
+  reload: () => void;
 }
 
 export function useEraSceneConfig(): EraSceneConfigState {
-  const { data, error, loading } = useApiRequest(loadEraSceneConfig);
-  return { config: data, loading, error };
+  const { data, error, loading, reload } = useApiRequest(loadEraSceneConfig);
+  return { config: data, loading, error, reload };
 }
