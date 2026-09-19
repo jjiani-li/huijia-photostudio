@@ -2,8 +2,8 @@
  * prompt 文本资产与版本注册表（`docs/prd/spec/05-Prompt工程.md` §1 铁律：prompt 是服务端资产、
  * 唯一副本、业务代码不得内联第二份）。
  *
- * 本条（`tickets/T06`）只放锚点提取的 `anchor-v1`；年代/场景模板与 `seed-v1` 归 `tickets/T08`、
- * 反推提示词归 `tickets/T18`，都追加到本文件。
+ * `anchor-v1` 由 `tickets/T06` 落地；年代/场景模板常量与 `seed-v1` 由 `tickets/T08` 追加到本文件；
+ * 反推提示词（`tickets/T18`）将来同样追加到这里。
  */
 
 /** 新写入 `identity_anchors.prompt_version` 的值取它（`docs/prd/modules/M03-身份锚点提取.md` §2）。 */
@@ -64,3 +64,21 @@ export const ANCHOR_V1_SYSTEM_PROMPT = `你是专业的人像特征提取助手�
 export const ANCHOR_PROMPTS: Record<string, string> = {
   [ANCHOR_PROMPT_VERSION]: ANCHOR_V1_SYSTEM_PROMPT,
 };
+
+/**
+ * 三张配置表的**版本常量与种子顶层常量**（`docs/prd/modules/M05-年代场景配置与Prompt拼装.md` §5.3）。
+ *
+ * `docs/prd/spec/era-scene-seed.json` 的顶层有 `version` / `realismAnchor` / `agePreserveClause` /
+ * `confidenceHintThreshold` 四个字段，它们**不属于任何表**、`pnpm seed` 也不写它们，
+ * 但 `GET /api/config/era-scene` 要下发 `version` / `realismAnchor` / `confidenceHintThreshold`
+ * （`docs/prd/spec/03-接口契约.md` §3.4）。因此在这里导出，并由 `build.test.ts` 断言与种子文件逐字符一致。
+ */
+
+/** 响应顶层 `version`；必须与 `docs/prd/spec/era-scene-seed.json` 顶层 `version` 相等（`DB-06`）。 */
+export const SEED_VERSION = 'seed-v1';
+
+/** 低置信组合的提示阈值，响应顶层 `confidenceHintThreshold`（`DB-04`、`docs/prd/spec/03-接口契约.md` §3.4）。 */
+export const CONFIDENCE_HINT_THRESHOLD = 0.6;
+
+// 响应顶层 `realismAnchor` 与 prompt【年龄保真】段正文：单点定义在 `./template`，此处按种子顶层字段名再导出。
+export { AGE_PRESERVE_CLAUSE, REALISM_ANCHOR } from './template';

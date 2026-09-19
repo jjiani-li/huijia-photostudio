@@ -196,3 +196,85 @@ export const anchorSchema = z.object({
   createdAt: z.string(),
   finishedAt: z.string().nullable(),
 });
+
+// ── 配置资产 DTO（`docs/prd/spec/03-接口契约.md` §3.4、§4；`API-02` / `API-06` 的唯一来源）────────
+
+/** 年代选项；**不含** `promptPack` / `constraintPack` / `styleJson` / `packVersion`（`API-06`）。 */
+export interface EraOption {
+  code: string;
+  name: string;
+  slug: string;
+  isMono: boolean;
+  caption: string;
+  sampleUrl: string | null;
+  sortOrder: number;
+}
+
+/** 场景选项；**不含** `spacePack` / `packVersion`（`API-06`）。 */
+export interface SceneOption {
+  id: number;
+  code: string;
+  name: string;
+  slug: string;
+  category: string | null;
+  caption: string;
+  coverUrl: string | null;
+  sortOrder: number;
+}
+
+/** 组合档案；**不含** `promptOverride`（`API-06`）。 */
+export interface EraSceneProfile {
+  eraCode: string;
+  sceneId: number;
+  confidence: number;
+  visualSignature: string;
+  sampleUrl: string | null;
+}
+
+/** `GET /api/config/era-scene` 的响应体（`docs/prd/spec/03-接口契约.md` §3.4、§4）。 */
+export interface EraSceneConfig {
+  version: string;
+  confidenceHintThreshold: number;
+  realismAnchor: string;
+  eras: EraOption[];
+  scenes: SceneOption[];
+  profiles: EraSceneProfile[];
+}
+
+export const eraOptionSchema = z.object({
+  code: z.string(),
+  name: z.string(),
+  slug: z.string(),
+  isMono: z.boolean(),
+  caption: z.string(),
+  sampleUrl: z.string().nullable(),
+  sortOrder: z.number().int(),
+});
+
+export const sceneOptionSchema = z.object({
+  id: z.number().int(),
+  code: z.string(),
+  name: z.string(),
+  slug: z.string(),
+  category: z.string().nullable(),
+  caption: z.string(),
+  coverUrl: z.string().nullable(),
+  sortOrder: z.number().int(),
+});
+
+export const eraSceneProfileSchema = z.object({
+  eraCode: z.string(),
+  sceneId: z.number().int(),
+  confidence: z.number(),
+  visualSignature: z.string(),
+  sampleUrl: z.string().nullable(),
+});
+
+export const eraSceneConfigSchema = z.object({
+  version: z.string(),
+  confidenceHintThreshold: z.number(),
+  realismAnchor: z.string(),
+  eras: z.array(eraOptionSchema),
+  scenes: z.array(sceneOptionSchema),
+  profiles: z.array(eraSceneProfileSchema),
+});

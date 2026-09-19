@@ -2,8 +2,9 @@
  * `pnpm check:acceptance` —— B 层契约与链路检查的执行器（`docs/prd/spec/07-验收标准.md` §3）。
  *
  * 骨架由 `tickets/T01-项目脚手架与本地开发环境.md` 声明；本条先接上数据层（`DB-01`–`DB-05`、`DB-08`，
- * 直接读库、不需 HTTP），`DB-06` / `DB-07` 待 `tickets/T08` 的配置端点与 `/api/health` 接线，
- * HTTP / E2E 用例由 `tickets/T10` / `tickets/T13` / `tickets/T20` 以「修改」方式追加。
+ * 直接读库、不需 HTTP）与 prompt 拼装（`PR-01`–`PR-09`）和 `DB-06`（`tickets/T08`，进程内即可判定）；
+ * `DB-07` 待 `/api/health` 接上 `db` 计数，HTTP / E2E 用例由 `tickets/T10` / `tickets/T13` / `tickets/T20`
+ * 以「修改」方式追加。
  *
  * 输出格式、失败即退出码 1、自带清理见 §3。前置：`pnpm migrate && pnpm seed` 已跑。
  */
@@ -11,9 +12,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getDb } from '../src/server/db/connection';
 import { hardDeleteAnchor, insert as insertAnchor } from '../src/server/db/repositories/anchors';
+import { readEraSceneConfig } from '../src/server/db/repositories/config';
 import { readFixture } from '../src/server/ark/fixtures';
 import { confirmAnchor, revokeConsents } from '../src/server/domain/anchorService';
 import { assertAnchorGeneratable } from '../src/server/domain/generationService';
+import { buildPrompt } from '../src/server/prompt/build';
+import { SEED_VERSION } from '../src/server/prompt/versions';
+import {
+  SECTION_AGE,
+  SECTION_ERA,
+  SECTION_ERA_FIT,
+  SECTION_IDENTITY,
+  SECTION_PROFILE,
+  SECTION_REALISM,
+  SECTION_SCENE,
+} from '../src/server/prompt/template';
 import { AppError } from '../src/server/domain/errors';
 import { nowIso } from '../src/server/domain/time';
 
@@ -50,6 +63,22 @@ const EXPECTED_TABLES = [
 const MIN_SIZE_PIXELS = 3_686_400;
 const CONFIDENCE_HINT = 0.6;
 const NEGATION_RE = /不要|禁止|不得出现|no\s/;
+/** `PR-03` 的判定正则（`docs/prd/spec/07-验收标准.md` §2.2，含 `without`）。 */
+const PROMPT_NEGATION_RE = /不要|禁止|no\s|without/;
+/** `PR-05` 的彩色正向词（E1 不得出现）。 */
+const PROMPT_COLOR_RE = /彩色胶卷|彩色颗粒|色彩/;
+/** `PR-07` 的长度区间（唯一声明在 `docs/prd/spec/07-验收标准.md` §2.2）。 */
+const PROMPT_MIN = 200;
+const PROMPT_MAX = 1200;
+/** `PR-01` 的 6 个固定段落标签（顺序即 `PR-02` 的递增顺序）。 */
+const PROMPT_SECTIONS = [
+  SECTION_IDENTITY,
+  SECTION_AGE,
+  SECTION_ERA,
+  SECTION_SCENE,
+  SECTION_REALISM,
+  SECTION_ERA_FIT,
+];
 
 const count = (table: string): number =>
   (getDb().prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
@@ -260,6 +289,104 @@ checks.push(
         ok: audit === 2 && consents === 2,
         expected: '2 条审计 + 2 行有效 consents',
         actual: `audit=${audit} consents=${consents}`,
+      };
+    },
+  },
+);
+
+// —— `tickets/T08` prompt 拼装（`docs/prd/modules/M05-年代场景配置与Prompt拼装.md` §8）：进程内跑 20 组 (E,S)，不需 HTTP ——
+const promptCases = (() => {
+  const config = readEraSceneConfig();
+  const eraByCode = new Map(config.eras.map((e) => [e.code, e]));
+  const sceneById = new Map(config.scenes.map((s) => [s.id, s]));
+  return config.profiles.map((profile) => {
+    const era = eraByCode.get(profile.eraCode);
+    const scene = sceneById.get(profile.sceneId);
+    if (era === undefined || scene === undefined) throw new Error('种子组合引用了缺失的年代 / 场景');
+    return {
+      era,
+      scene,
+      profile,
+      out: buildPrompt({ anchorText: ANCHOR_SAMPLE.anchorText, era, scene, profile }),
+    };
+  });
+})();
+
+const combosSatisfy = (predicate: (c: (typeof promptCases)[number]) => boolean): CheckResult => {
+  const bad = promptCases.filter((c) => !predicate(c));
+  return {
+    ok: bad.length === 0,
+    expected: `${promptCases.length}/${promptCases.length} 通过`,
+    actual: `${promptCases.length - bad.length}/${promptCases.length} 通过`,
+  };
+};
+
+checks.push(
+  {
+    id: 'PR-01',
+    run: () => combosSatisfy((c) => PROMPT_SECTIONS.every((label) => c.out.prompt.includes(label))),
+  },
+  {
+    id: 'PR-02',
+    run: () =>
+      combosSatisfy((c) => {
+        const idx = PROMPT_SECTIONS.map((label) => c.out.prompt.indexOf(label));
+        return idx.every((v, i) => i === 0 || v > idx[i - 1]);
+      }),
+  },
+  { id: 'PR-03', run: () => combosSatisfy((c) => !PROMPT_NEGATION_RE.test(c.out.prompt)) },
+  {
+    id: 'PR-04',
+    run: () => combosSatisfy((c) => c.out.prompt.includes('不做任何美化') && c.out.prompt.includes('减龄')),
+  },
+  {
+    id: 'PR-05',
+    run: () =>
+      combosSatisfy(
+        (c) => c.era.code !== 'E1' || (c.out.prompt.includes('黑白') && !PROMPT_COLOR_RE.test(c.out.prompt)),
+      ),
+  },
+  {
+    id: 'PR-06',
+    run: () =>
+      combosSatisfy((c) => (c.era.code !== 'E3' && c.era.code !== 'E4') || !c.out.prompt.includes('胶片')),
+  },
+  {
+    id: 'PR-07',
+    run: () => combosSatisfy((c) => c.out.prompt.length >= PROMPT_MIN && c.out.prompt.length <= PROMPT_MAX),
+  },
+  {
+    id: 'PR-08',
+    run: () =>
+      combosSatisfy((c) => {
+        const again = buildPrompt({
+          anchorText: ANCHOR_SAMPLE.anchorText,
+          era: c.era,
+          scene: c.scene,
+          profile: c.profile,
+        });
+        return again.prompt === c.out.prompt && again.promptHash === c.out.promptHash;
+      }),
+  },
+  {
+    id: 'PR-09',
+    run: () =>
+      combosSatisfy((c) =>
+        c.profile.promptOverride === null
+          ? !c.out.prompt.includes(SECTION_PROFILE)
+          : c.out.prompt.endsWith(SECTION_PROFILE + c.profile.promptOverride),
+      ),
+  },
+  {
+    id: 'DB-06',
+    run: () => {
+      const seed = JSON.parse(
+        fs.readFileSync(path.resolve(process.cwd(), 'docs/prd/spec/era-scene-seed.json'), 'utf8'),
+      ) as { version: string };
+      return {
+        ok: SEED_VERSION === seed.version,
+        expected: `version=${seed.version}`,
+        actual: `SEED_VERSION=${SEED_VERSION}`,
       };
     },
   },

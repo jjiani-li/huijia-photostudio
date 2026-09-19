@@ -7,10 +7,15 @@ import { runMigrations } from '../db/migrate';
 import { runSeed } from '../db/seed';
 import { insert, type InsertAnchorInput } from '../db/repositories/anchors';
 import { ensureActive } from '../db/repositories/consents';
+import { getEra, getProfile, getScene, type EraRecord } from '../db/repositories/config';
 import { nowIso } from './time';
 import { AppError } from './errors';
 import { revokeConsents } from './anchorService';
-import { assertAnchorGeneratable } from './generationService';
+import {
+  assertAnchorGeneratable,
+  buildGenerationDraft,
+  type GenerationDraft,
+} from './generationService';
 
 /**
  * `assertAnchorGeneratable` 的单元形态（`docs/prd/modules/M04-身份确认与授权.md` §8.1 第 ⑥ 条）：
@@ -105,5 +110,62 @@ describe('assertAnchorGeneratable（M04 §5.3 两步守卫）', () => {
     const id = makeAnchor();
     getDb().prepare('UPDATE identity_anchors SET user_id = 2 WHERE id = ?').run(id);
     expect(codeOf(() => assertAnchorGeneratable(1, id))).toBe('ANCHOR_NOT_FOUND');
+  });
+});
+
+// ── buildGenerationDraft（modules/M05 §5.2、§5.3）：size 校验与拼装产物落库取值 ──────────────
+
+const era = (over: Partial<EraRecord> = {}): EraRecord => {
+  const base = getEra('E2');
+  if (base === null) throw new Error('种子缺 E2');
+  return { ...base, ...over };
+};
+
+const draft = (anchorText: string, eraRecord: EraRecord = era()): GenerationDraft => {
+  const scene = getScene(1);
+  if (scene === null) throw new Error('种子缺场景 1');
+  return buildGenerationDraft({ anchorText, era: eraRecord, scene, profile: getProfile('E2', 1) });
+};
+
+describe('buildGenerationDraft（modules/M05 §5.1–§5.3）', () => {
+  it('2048x2048 通过；size 原样写入 params，outputFormat=png，provider=mock，watermark=false', () => {
+    const result = draft('一个老年男性的身份锚点描述，长度足够用于拼装');
+    expect(result.params.size).toBe('2048x2048');
+    expect(result.params.outputFormat).toBe('png');
+    expect(result.params.provider).toBe('mock');
+    expect(result.params.watermark).toBe(false);
+  });
+
+  it('template_version=tpl-v1，两个 pack 版本取行值，prompt/hash 来自 buildPrompt', () => {
+    const result = draft('一个老年男性的身份锚点描述，长度足够用于拼装');
+    expect(result.templateVersion).toBe('tpl-v1');
+    expect(result.eraPackVersion).toBe(era().packVersion);
+    expect(result.scenePackVersion).toBe(getScene(1)?.packVersion);
+    expect(result.promptHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.prompt.length).toBeGreaterThan(0);
+  });
+
+  it('WATERMARK_DEFAULT=true / PROVIDER=real 时透传', () => {
+    process.env.WATERMARK_DEFAULT = 'true';
+    process.env.PROVIDER = 'real';
+    try {
+      const result = draft('一个老年男性的身份锚点描述，长度足够用于拼装');
+      expect(result.params.watermark).toBe(true);
+      expect(result.params.provider).toBe('real');
+    } finally {
+      delete process.env.WATERMARK_DEFAULT;
+      delete process.env.PROVIDER;
+    }
+  });
+
+  it('size 低于下限 / 形状非法 → INTERNAL', () => {
+    expect(codeOf(() => draft('有效锚点描述文本', era({ defaultSize: '1024x1024' })))).toBe('INTERNAL');
+    expect(codeOf(() => draft('有效锚点描述文本', era({ defaultSize: '1000x3686' })))).toBe('INTERNAL');
+    expect(codeOf(() => draft('有效锚点描述文本', era({ defaultSize: '2048' })))).toBe('INTERNAL');
+  });
+
+  it('anchorText 为空 / 全空白 → ANCHOR_NOT_CONFIRMED（不抛 INTERNAL）', () => {
+    expect(codeOf(() => draft(''))).toBe('ANCHOR_NOT_CONFIRMED');
+    expect(codeOf(() => draft('   '))).toBe('ANCHOR_NOT_CONFIRMED');
   });
 });
