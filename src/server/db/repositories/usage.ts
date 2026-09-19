@@ -2,7 +2,7 @@ import { getDb } from '../connection';
 
 /**
  * `usage_counters` 表 SQL（`docs/prd/spec/01-领域模型与数据库.md` §3.12）。
- * 额度判断读 `users.daily_image_quota`；预扣与回滚归 `tickets/T09`。
+ * 额度阈值判断（读 `users.daily_image_quota`）与预扣编排归 `tickets/T09`；本文件只提供计数 SQL。
  */
 export interface UsageCounterRecord {
   userId: number;
@@ -35,12 +35,15 @@ export const getDay = (userId: number, day: string): UsageCounterRecord => {
 /** 预扣：`generations += 1`、`images += count`（`modules/M06-生成编排.md` §5.2 第 ② 步）。 */
 export const deduct = (userId: number, day: string, count: number): UsageCounterRecord => {
   getDb()
-    .prepare(
-      `INSERT INTO usage_counters (user_id, day, generations, images)
-       VALUES (@userId, @day, 1, @count)
-       ON CONFLICT(user_id, day) DO UPDATE SET
-         generations = generations + 1, images = images + @count`,
-    )
-    .run({ userId, day, count });
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `INSERT INTO usage_counters (user_id, day, generations, images)
+           VALUES (@userId, @day, 1, @count)
+           ON CONFLICT(user_id, day) DO UPDATE SET
+             generations = generations + 1, images = images + @count`,
+        )
+        .run({ userId, day, count }),
+    )();
   return getDay(userId, day);
 };

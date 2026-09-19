@@ -58,17 +58,20 @@ export interface InsertContentReviewInput {
 }
 
 export const insert = (input: InsertContentReviewInput): ContentReviewRecord => {
-  const info = getDb()
-    .prepare(
-      `INSERT INTO content_reviews (user_id, stage, target_type, target_id, verdict, reason, model, created_at)
-       VALUES (@userId, @stage, @targetType, @targetId, @verdict, @reason, @model, @createdAt)`,
-    )
-    .run(input);
-  const row = getDb().prepare(`SELECT ${COLUMNS} FROM content_reviews WHERE id = ?`).get(info.lastInsertRowid) as
-    | ContentReviewRow
-    | undefined;
-  if (row === undefined) throw new Error('content_reviews 插入后读回失败');
-  return toReview(row);
+  const db = getDb();
+  return db.transaction(() => {
+    const info = db
+      .prepare(
+        `INSERT INTO content_reviews (user_id, stage, target_type, target_id, verdict, reason, model, created_at)
+         VALUES (@userId, @stage, @targetType, @targetId, @verdict, @reason, @model, @createdAt)`,
+      )
+      .run(input);
+    const row = db
+      .prepare(`SELECT ${COLUMNS} FROM content_reviews WHERE id = ?`)
+      .get(info.lastInsertRowid) as ContentReviewRow | undefined;
+    if (row === undefined) throw new Error('content_reviews 插入后读回失败');
+    return toReview(row);
+  })();
 };
 
 export const listByTarget = (targetType: string, targetId: number): ContentReviewRecord[] =>

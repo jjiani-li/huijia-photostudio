@@ -1,4 +1,5 @@
 import { getDb } from '../connection';
+import { objectJson, parseRequiredJsonColumn } from '../json';
 
 /**
  * 配置资产 `eras` / `scenes` / `era_scene_profiles` 的只读读取
@@ -104,7 +105,7 @@ const toEra = (row: EraRow): EraRecord => ({
   slug: row.slug,
   isMono: row.is_mono === 1,
   defaultSize: row.default_size,
-  styleJson: JSON.parse(row.style_json) as unknown,
+  styleJson: parseRequiredJsonColumn(row.style_json, objectJson, 'eras.style_json'),
   promptPack: row.prompt_pack,
   constraintPack: row.constraint_pack,
   caption: row.caption,

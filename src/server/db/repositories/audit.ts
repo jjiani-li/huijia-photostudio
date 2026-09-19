@@ -1,4 +1,5 @@
 import { getDb } from '../connection';
+import { objectJson, parseJsonColumn } from '../json';
 import { nowIso } from '../../domain/time';
 import type { Iso } from '../../../shared/types';
 
@@ -31,7 +32,7 @@ const toAudit = (row: AuditRow): AuditRecord => ({
   userId: row.user_id,
   action: row.action,
   target: row.target,
-  meta: row.meta_json === null ? null : (JSON.parse(row.meta_json) as unknown),
+  meta: parseJsonColumn(row.meta_json, objectJson, 'audit_logs.meta_json'),
   createdAt: row.created_at,
 });
 
@@ -45,23 +46,26 @@ export interface WriteAuditInput {
 }
 
 export const write = (input: WriteAuditInput): AuditRecord => {
-  const info = getDb()
-    .prepare(
-      `INSERT INTO audit_logs (user_id, action, target, meta_json, created_at)
-       VALUES (@userId, @action, @target, @metaJson, @createdAt)`,
-    )
-    .run({
-      userId: input.userId ?? null,
-      action: input.action,
-      target: input.target ?? null,
-      metaJson: input.meta === undefined || input.meta === null ? null : JSON.stringify(input.meta),
-      createdAt: input.createdAt ?? nowIso(),
-    });
-  const row = getDb().prepare(`SELECT ${COLUMNS} FROM audit_logs WHERE id = ?`).get(info.lastInsertRowid) as
-    | AuditRow
-    | undefined;
-  if (row === undefined) throw new Error('audit_logs 插入后读回失败');
-  return toAudit(row);
+  const db = getDb();
+  return db.transaction(() => {
+    const info = db
+      .prepare(
+        `INSERT INTO audit_logs (user_id, action, target, meta_json, created_at)
+         VALUES (@userId, @action, @target, @metaJson, @createdAt)`,
+      )
+      .run({
+        userId: input.userId ?? null,
+        action: input.action,
+        target: input.target ?? null,
+        metaJson: input.meta === undefined || input.meta === null ? null : JSON.stringify(input.meta),
+        createdAt: input.createdAt ?? nowIso(),
+      });
+    const row = db.prepare(`SELECT ${COLUMNS} FROM audit_logs WHERE id = ?`).get(info.lastInsertRowid) as
+      | AuditRow
+      | undefined;
+    if (row === undefined) throw new Error('audit_logs 插入后读回失败');
+    return toAudit(row);
+  })();
 };
 
 export const listByUser = (userId: number): AuditRecord[] =>

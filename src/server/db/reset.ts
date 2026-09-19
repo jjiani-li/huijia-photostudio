@@ -1,7 +1,6 @@
 import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { closeDb, dbPath } from './connection';
+import { isMain } from './cli';
 import { runMigrations } from './migrate';
 import { runSeed, type SeedResult } from './seed';
 import { nowIso } from '../domain/time';
@@ -30,12 +29,7 @@ export const resetDatabase = (): { removed: string[] } & SeedResult => {
   return { removed, ...runSeed() };
 };
 
-const isMain = (() => {
-  const entry = process.argv[1];
-  return entry != null && path.resolve(entry) === fileURLToPath(import.meta.url);
-})();
-
-if (isMain) {
+if (isMain(import.meta.url)) {
   const result = resetDatabase();
   console.log(
     JSON.stringify({

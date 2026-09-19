@@ -35,32 +35,38 @@ const toConsent = (row: ConsentRow): ConsentRecord => ({
   revokedAt: row.revoked_at,
 });
 
-/** 幂等写：同 `userId` + `anchorId` + `scope` 未吊销则复用，不新增（`modules/M04-身份确认与授权.md` §5.1 ⑤）。 */
+/**
+ * 幂等写：同 `userId` + `anchorId` + `scope` 未吊销则复用，不新增（`modules/M04-身份确认与授权.md` §5.1 ⑤）。
+ * 这是「读判 → 写」，用 `BEGIN IMMEDIATE` 取写锁（`spec/04-技术基线与目录结构.md` §4.3）。
+ */
 export const ensureActive = (input: {
   userId: number;
   anchorId: number | null;
   scope: string;
   agreedAt: Iso;
 }): ConsentRecord => {
-  const existing = getDb()
-    .prepare(
-      `SELECT ${COLUMNS} FROM consents
-       WHERE user_id = @userId AND scope = @scope AND anchor_id IS @anchorId AND revoked_at IS NULL
-       LIMIT 1`,
-    )
-    .get(input) as ConsentRow | undefined;
-  if (existing !== undefined) return toConsent(existing);
-  const info = getDb()
-    .prepare(
-      `INSERT INTO consents (user_id, scope, anchor_id, agreed_at)
-       VALUES (@userId, @scope, @anchorId, @agreedAt)`,
-    )
-    .run(input);
-  const row = getDb().prepare(`SELECT ${COLUMNS} FROM consents WHERE id = ?`).get(info.lastInsertRowid) as
-    | ConsentRow
-    | undefined;
-  if (row === undefined) throw new Error('consents 插入后读回失败');
-  return toConsent(row);
+  const db = getDb();
+  return db.transaction(() => {
+    const existing = db
+      .prepare(
+        `SELECT ${COLUMNS} FROM consents
+         WHERE user_id = @userId AND scope = @scope AND anchor_id IS @anchorId AND revoked_at IS NULL
+         LIMIT 1`,
+      )
+      .get(input) as ConsentRow | undefined;
+    if (existing !== undefined) return toConsent(existing);
+    const info = db
+      .prepare(
+        `INSERT INTO consents (user_id, scope, anchor_id, agreed_at)
+         VALUES (@userId, @scope, @anchorId, @agreedAt)`,
+      )
+      .run(input);
+    const row = db.prepare(`SELECT ${COLUMNS} FROM consents WHERE id = ?`).get(info.lastInsertRowid) as
+      | ConsentRow
+      | undefined;
+    if (row === undefined) throw new Error('consents 插入后读回失败');
+    return toConsent(row);
+  }).immediate();
 };
 
 export const hasActiveScope = (userId: number, scope: string): boolean =>
@@ -78,8 +84,11 @@ export const listByUser = (userId: number): ConsentRecord[] =>
 /** 吊销不删行（授权留痕，`spec/01` §2.3）。 */
 export const revokeByAnchor = (anchorId: number, revokedAt: Iso): void => {
   getDb()
-    .prepare(
-      'UPDATE consents SET revoked_at = @revokedAt WHERE anchor_id = @anchorId AND revoked_at IS NULL',
-    )
-    .run({ anchorId, revokedAt });
+    .transaction(() =>
+      getDb()
+        .prepare(
+          'UPDATE consents SET revoked_at = @revokedAt WHERE anchor_id = @anchorId AND revoked_at IS NULL',
+        )
+        .run({ anchorId, revokedAt }),
+    )();
 };

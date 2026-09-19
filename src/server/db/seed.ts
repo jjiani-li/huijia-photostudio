@@ -1,8 +1,8 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { getDb } from './connection';
+import { isMain } from './cli';
 import { nowIso } from '../domain/time';
 
 /**
@@ -192,12 +192,7 @@ export const runSeed = (): SeedResult => {
   return result;
 };
 
-const isMain = (() => {
-  const entry = process.argv[1];
-  return entry != null && path.resolve(entry) === fileURLToPath(import.meta.url);
-})();
-
-if (isMain) {
+if (isMain(import.meta.url)) {
   const result = runSeed();
   console.log(
     JSON.stringify({

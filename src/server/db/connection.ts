@@ -15,11 +15,11 @@ export const dbPath = (): string => process.env.DATABASE_PATH ?? './data/app.db'
 /** 内存/文件两用：传入路径时返回新连接（测试用），不注册为单例。 */
 export const openDb = (file: string): Database.Database => {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
+  // `timeout` 即 busy_timeout（spec/04 §4.3），不再单独 `PRAGMA busy_timeout`。
   const db = new Database(file, { timeout: 5000 });
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = OFF'); // 软删除语义靠应用层，不启用外键级联（spec/01 §2.3）
   db.pragma('synchronous = NORMAL');
-  db.pragma('busy_timeout = 5000');
   return db;
 };
 

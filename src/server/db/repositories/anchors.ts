@@ -1,9 +1,11 @@
 import { getDb } from '../connection';
+import { idArrayJson, objectJson, parseJsonColumn, parseRequiredJsonColumn } from '../json';
 import type { Iso } from '../../../shared/types';
 
 /**
  * `identity_anchors` 表 SQL（`docs/prd/spec/01-领域模型与数据库.md` §3.5、状态机 §2.1）。
  * 提取 / 确认 / 重试编排归 `tickets/T06`、`tickets/T07`；本文件提供 SQL 底座。
+ * 写函数自带 `db.transaction`，可在 `domain/*Service` 的事务内安全嵌套。
  */
 export type AnchorStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 
@@ -52,20 +54,18 @@ interface AnchorRow {
 const COLUMNS =
   'id, user_id, input_photo_ids, preprocessed_photo_id, status, attempt, anchor_text, features_json, model, prompt_version, quality_json, error_code, error_message, confirmed_by_user, confirmed_at, created_at, started_at, finished_at';
 
-const parseJson = (value: string | null): unknown => (value === null ? null : (JSON.parse(value) as unknown));
-
 const toAnchor = (row: AnchorRow): AnchorRecord => ({
   id: row.id,
   userId: row.user_id,
-  inputPhotoIds: JSON.parse(row.input_photo_ids) as number[],
+  inputPhotoIds: parseRequiredJsonColumn(row.input_photo_ids, idArrayJson, 'identity_anchors.input_photo_ids'),
   preprocessedPhotoId: row.preprocessed_photo_id,
   status: row.status,
   attempt: row.attempt,
   anchorText: row.anchor_text,
-  features: parseJson(row.features_json),
+  features: parseJsonColumn(row.features_json, objectJson, 'identity_anchors.features_json'),
   model: row.model,
   promptVersion: row.prompt_version,
-  quality: parseJson(row.quality_json),
+  quality: parseJsonColumn(row.quality_json, objectJson, 'identity_anchors.quality_json'),
   errorCode: row.error_code,
   errorMessage: row.error_message,
   confirmedByUser: row.confirmed_by_user,
@@ -109,32 +109,39 @@ export interface InsertAnchorInput {
 }
 
 export const insert = (input: InsertAnchorInput): AnchorRecord => {
-  const info = getDb()
-    .prepare(
-      `INSERT INTO identity_anchors (user_id, input_photo_ids, preprocessed_photo_id, status,
-                                     attempt, model, prompt_version, quality_json, created_at)
-       VALUES (@userId, @inputPhotoIds, @preprocessedPhotoId, @status, @attempt, @model,
-               @promptVersion, @qualityJson, @createdAt)`,
-    )
-    .run({
-      ...input,
-      inputPhotoIds: JSON.stringify(input.inputPhotoIds),
-      qualityJson: input.quality === null || input.quality === undefined ? null : JSON.stringify(input.quality),
-    });
-  const row = getDb().prepare(`SELECT ${COLUMNS} FROM identity_anchors WHERE id = ?`).get(info.lastInsertRowid) as
-    | AnchorRow
-    | undefined;
-  if (row === undefined) throw new Error('identity_anchors 插入后读回失败');
-  return toAnchor(row);
+  const db = getDb();
+  return db.transaction(() => {
+    const info = db
+      .prepare(
+        `INSERT INTO identity_anchors (user_id, input_photo_ids, preprocessed_photo_id, status,
+                                       attempt, model, prompt_version, quality_json, created_at)
+         VALUES (@userId, @inputPhotoIds, @preprocessedPhotoId, @status, @attempt, @model,
+                 @promptVersion, @qualityJson, @createdAt)`,
+      )
+      .run({
+        ...input,
+        inputPhotoIds: JSON.stringify(input.inputPhotoIds),
+        qualityJson:
+          input.quality === null || input.quality === undefined ? null : JSON.stringify(input.quality),
+      });
+    const row = db.prepare(`SELECT ${COLUMNS} FROM identity_anchors WHERE id = ?`).get(info.lastInsertRowid) as
+      | AnchorRow
+      | undefined;
+    if (row === undefined) throw new Error('identity_anchors 插入后读回失败');
+    return toAnchor(row);
+  })();
 };
 
 /** 强制确认节点：仅 0→1 落值，重复确认不改 `confirmed_at`（`docs/prd/modules/M04-身份确认与授权.md` §5.1 ⑥）。 */
 export const markConfirmed = (id: number, confirmedAt: Iso): void => {
   getDb()
-    .prepare(
-      `UPDATE identity_anchors SET confirmed_by_user = 1,
-               confirmed_at = COALESCE(confirmed_at, @confirmedAt)
-       WHERE id = @id AND confirmed_by_user = 0`,
-    )
-    .run({ id, confirmedAt });
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `UPDATE identity_anchors SET confirmed_by_user = 1,
+                   confirmed_at = COALESCE(confirmed_at, @confirmedAt)
+           WHERE id = @id AND confirmed_by_user = 0`,
+        )
+        .run({ id, confirmedAt }),
+    )();
 };

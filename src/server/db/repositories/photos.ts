@@ -1,4 +1,5 @@
 import { getDb } from '../connection';
+import { objectJson, parseJsonColumn } from '../json';
 import type { Iso } from '../../../shared/types';
 
 /**
@@ -51,7 +52,7 @@ const toPhoto = (row: PhotoRow): PhotoRecord => ({
   height: row.height,
   sha256: row.sha256,
   sourcePhotoId: row.source_photo_id,
-  quality: row.quality_json === null ? null : (JSON.parse(row.quality_json) as unknown),
+  quality: parseJsonColumn(row.quality_json, objectJson, 'photos.quality_json'),
   deletedAt: row.deleted_at,
   createdAt: row.created_at,
 });
@@ -85,27 +86,34 @@ export interface InsertPhotoInput {
 }
 
 export const insert = (input: InsertPhotoInput): PhotoRecord => {
-  const info = getDb()
-    .prepare(
-      `INSERT INTO photos (user_id, kind, storage_key, mime, bytes, width, height, sha256,
-                           source_photo_id, quality_json, created_at)
-       VALUES (@userId, @kind, @storageKey, @mime, @bytes, @width, @height, @sha256,
-               @sourcePhotoId, @qualityJson, @createdAt)`,
-    )
-    .run({
-      ...input,
-      qualityJson: input.quality === null || input.quality === undefined ? null : JSON.stringify(input.quality),
-    });
-  const row = getDb().prepare(`SELECT ${COLUMNS} FROM photos WHERE id = ?`).get(info.lastInsertRowid) as
-    | PhotoRow
-    | undefined;
-  if (row === undefined) throw new Error('photos 插入后读回失败');
-  return toPhoto(row);
+  const db = getDb();
+  return db.transaction(() => {
+    const info = db
+      .prepare(
+        `INSERT INTO photos (user_id, kind, storage_key, mime, bytes, width, height, sha256,
+                             source_photo_id, quality_json, created_at)
+         VALUES (@userId, @kind, @storageKey, @mime, @bytes, @width, @height, @sha256,
+                 @sourcePhotoId, @qualityJson, @createdAt)`,
+      )
+      .run({
+        ...input,
+        qualityJson:
+          input.quality === null || input.quality === undefined ? null : JSON.stringify(input.quality),
+      });
+    const row = db.prepare(`SELECT ${COLUMNS} FROM photos WHERE id = ?`).get(info.lastInsertRowid) as
+      | PhotoRow
+      | undefined;
+    if (row === undefined) throw new Error('photos 插入后读回失败');
+    return toPhoto(row);
+  })();
 };
 
 /** 软删除：立即从所有读取路径消失，物理清理见 `modules/M08-账号历史与彻底删除.md` §5。 */
 export const softDelete = (id: number, deletedAt: Iso): void => {
   getDb()
-    .prepare('UPDATE photos SET deleted_at = @deletedAt WHERE id = @id AND deleted_at IS NULL')
-    .run({ id, deletedAt });
+    .transaction(() =>
+      getDb()
+        .prepare('UPDATE photos SET deleted_at = @deletedAt WHERE id = @id AND deleted_at IS NULL')
+        .run({ id, deletedAt }),
+    )();
 };

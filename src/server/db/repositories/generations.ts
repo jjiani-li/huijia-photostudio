@@ -1,9 +1,11 @@
 import { getDb } from '../connection';
+import { idArrayJson, objectJson, parseRequiredJsonColumn } from '../json';
 import type { Iso } from '../../../shared/types';
 
 /**
  * `generations` 表 SQL（`docs/prd/spec/01-领域模型与数据库.md` §3.9、状态机 §2.2）。
  * 8 步校验、单事务入队、worker 状态流转归 `tickets/T09`、`tickets/T10`、`tickets/T13`。
+ * 写函数自带 `db.transaction`，可在 `domain/*Service` 的事务内安全嵌套。
  */
 export type GenerationStatus = 'queued' | 'running' | 'succeeded' | 'partial' | 'failed';
 
@@ -67,14 +69,18 @@ const toGeneration = (row: GenerationRow): GenerationRecord => ({
   eraCode: row.era_code,
   sceneId: row.scene_id,
   profileId: row.profile_id,
-  referencePhotoIds: JSON.parse(row.reference_photo_ids) as number[],
+  referencePhotoIds: parseRequiredJsonColumn(
+    row.reference_photo_ids,
+    idArrayJson,
+    'generations.reference_photo_ids',
+  ),
   prompt: row.prompt,
   promptHash: row.prompt_hash,
   templateVersion: row.template_version,
   eraPackVersion: row.era_pack_version,
   scenePackVersion: row.scene_pack_version,
   model: row.model,
-  params: JSON.parse(row.params_json) as unknown,
+  params: parseRequiredJsonColumn(row.params_json, objectJson, 'generations.params_json'),
   requestedCount: row.requested_count,
   status: row.status,
   attempt: row.attempt,
@@ -130,26 +136,29 @@ export interface InsertGenerationInput {
 }
 
 export const insert = (input: InsertGenerationInput): GenerationRecord => {
-  const info = getDb()
-    .prepare(
-      `INSERT INTO generations (user_id, anchor_id, era_code, scene_id, profile_id,
-                                reference_photo_ids, prompt, prompt_hash, template_version,
-                                era_pack_version, scene_pack_version, model, params_json,
-                                requested_count, status, attempt, created_at)
-       VALUES (@userId, @anchorId, @eraCode, @sceneId, @profileId, @referencePhotoIds, @prompt,
-               @promptHash, @templateVersion, @eraPackVersion, @scenePackVersion, @model,
-               @paramsJson, @requestedCount, @status, @attempt, @createdAt)`,
-    )
-    .run({
-      ...input,
-      referencePhotoIds: JSON.stringify(input.referencePhotoIds),
-      paramsJson: JSON.stringify(input.params),
-    });
-  const row = getDb().prepare(`SELECT ${COLUMNS} FROM generations WHERE id = ?`).get(info.lastInsertRowid) as
-    | GenerationRow
-    | undefined;
-  if (row === undefined) throw new Error('generations 插入后读回失败');
-  return toGeneration(row);
+  const db = getDb();
+  return db.transaction(() => {
+    const info = db
+      .prepare(
+        `INSERT INTO generations (user_id, anchor_id, era_code, scene_id, profile_id,
+                                  reference_photo_ids, prompt, prompt_hash, template_version,
+                                  era_pack_version, scene_pack_version, model, params_json,
+                                  requested_count, status, attempt, created_at)
+         VALUES (@userId, @anchorId, @eraCode, @sceneId, @profileId, @referencePhotoIds, @prompt,
+                 @promptHash, @templateVersion, @eraPackVersion, @scenePackVersion, @model,
+                 @paramsJson, @requestedCount, @status, @attempt, @createdAt)`,
+      )
+      .run({
+        ...input,
+        referencePhotoIds: JSON.stringify(input.referencePhotoIds),
+        paramsJson: JSON.stringify(input.params),
+      });
+    const row = db.prepare(`SELECT ${COLUMNS} FROM generations WHERE id = ?`).get(info.lastInsertRowid) as
+      | GenerationRow
+      | undefined;
+    if (row === undefined) throw new Error('generations 插入后读回失败');
+    return toGeneration(row);
+  })();
 };
 
 export interface UpdateGenerationTerminalInput {
@@ -165,10 +174,13 @@ export interface UpdateGenerationTerminalInput {
 /** 置终态 / 重新入队（worker 的状态流转，`modules/M06-生成编排.md` §5.3）。 */
 export const updateStatus = (input: UpdateGenerationTerminalInput): void => {
   getDb()
-    .prepare(
-      `UPDATE generations SET status = @status, attempt = @attempt, error_code = @errorCode,
-               error_message = @errorMessage, started_at = @startedAt, finished_at = @finishedAt
-       WHERE id = @id`,
-    )
-    .run(input);
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `UPDATE generations SET status = @status, attempt = @attempt, error_code = @errorCode,
+                   error_message = @errorMessage, started_at = @startedAt, finished_at = @finishedAt
+           WHERE id = @id`,
+        )
+        .run(input),
+    )();
 };

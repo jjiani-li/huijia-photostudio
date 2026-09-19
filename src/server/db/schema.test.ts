@@ -123,6 +123,8 @@ describe('DB-05 default_size 尺寸下限', () => {
 
 describe('DB-08 配置表只由种子写入', () => {
   it('业务代码中不存在对 eras / scenes / era_scene_profiles 的写语句', () => {
+    // 「业务代码」= 仓库根的 src/ 与 app/（spec/07 §2.1）；排除 src/server/db/seed.ts（种子的唯一写入路径）
+    // 与 *.test.ts（测试不是业务代码）。migrations/*.sql 是 DDL，不含这三张表的 DML。
     const writeRe =
       /\b(insert\s+into|update|delete\s+from|replace\s+into)\s+(eras|scenes|era_scene_profiles)\b/i;
     const offenders: string[] = [];

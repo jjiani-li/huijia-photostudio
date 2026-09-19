@@ -24,6 +24,8 @@ interface LoginCodeRow {
   created_at: string;
 }
 
+const COLUMNS = 'id, identifier, code, purpose, expires_at, consumed_at, created_at';
+
 const toLoginCode = (row: LoginCodeRow): LoginCodeRecord => ({
   id: row.id,
   identifier: row.identifier,
@@ -43,36 +45,34 @@ export interface InsertLoginCodeInput {
 }
 
 export const insert = (input: InsertLoginCodeInput): LoginCodeRecord => {
-  const info = getDb()
-    .prepare(
-      `INSERT INTO login_codes (identifier, code, purpose, expires_at, created_at)
-       VALUES (@identifier, @code, @purpose, @expiresAt, @createdAt)`,
-    )
-    .run(input);
-  const row = getDb()
-    .prepare(
-      `SELECT id, identifier, code, purpose, expires_at, consumed_at, created_at
-       FROM login_codes WHERE id = ?`,
-    )
-    .get(info.lastInsertRowid) as LoginCodeRow | undefined;
-  if (row === undefined) throw new Error('login_codes 插入后读回失败');
-  return toLoginCode(row);
+  const db = getDb();
+  return db.transaction(() => {
+    const info = db
+      .prepare(
+        `INSERT INTO login_codes (identifier, code, purpose, expires_at, created_at)
+         VALUES (@identifier, @code, @purpose, @expiresAt, @createdAt)`,
+      )
+      .run(input);
+    const row = db.prepare(`SELECT ${COLUMNS} FROM login_codes WHERE id = ?`).get(info.lastInsertRowid) as
+      | LoginCodeRow
+      | undefined;
+    if (row === undefined) throw new Error('login_codes 插入后读回失败');
+    return toLoginCode(row);
+  })();
 };
 
 export const findLatestByIdentifier = (identifier: string): LoginCodeRecord | null => {
   const row = getDb()
-    .prepare(
-      `SELECT id, identifier, code, purpose, expires_at, consumed_at, created_at
-       FROM login_codes WHERE identifier = ? ORDER BY created_at DESC LIMIT 1`,
-    )
+    .prepare(`SELECT ${COLUMNS} FROM login_codes WHERE identifier = ? ORDER BY created_at DESC LIMIT 1`)
     .get(identifier) as LoginCodeRow | undefined;
   return row === undefined ? null : toLoginCode(row);
 };
 
 export const consume = (id: number, consumedAt: string): void => {
   getDb()
-    .prepare(
-      'UPDATE login_codes SET consumed_at = @consumedAt WHERE id = @id AND consumed_at IS NULL',
-    )
-    .run({ id, consumedAt });
+    .transaction(() =>
+      getDb()
+        .prepare('UPDATE login_codes SET consumed_at = @consumedAt WHERE id = @id AND consumed_at IS NULL')
+        .run({ id, consumedAt }),
+    )();
 };

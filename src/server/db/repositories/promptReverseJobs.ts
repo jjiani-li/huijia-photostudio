@@ -1,4 +1,5 @@
 import { getDb } from '../connection';
+import { objectJson, parseJsonColumn } from '../json';
 import type { Iso } from '../../../shared/types';
 
 /**
@@ -51,7 +52,7 @@ const toJob = (row: PromptReverseJobRow): PromptReverseJobRecord => ({
   userId: row.user_id,
   sourcePhotoId: row.source_photo_id,
   model: row.model,
-  result: row.result_json === null ? null : (JSON.parse(row.result_json) as unknown),
+  result: parseJsonColumn(row.result_json, objectJson, 'prompt_reverse_jobs.result_json'),
   resultPrompt: row.result_prompt,
   suggestEraCode: row.suggest_era_code,
   suggestSceneId: row.suggest_scene_id,
@@ -88,15 +89,18 @@ export interface InsertPromptReverseJobInput {
 }
 
 export const insert = (input: InsertPromptReverseJobInput): PromptReverseJobRecord => {
-  const info = getDb()
-    .prepare(
-      `INSERT INTO prompt_reverse_jobs (user_id, source_photo_id, model, status, attempt, created_at)
-       VALUES (@userId, @sourcePhotoId, @model, @status, @attempt, @createdAt)`,
-    )
-    .run(input);
-  const row = getDb().prepare(`SELECT ${COLUMNS} FROM prompt_reverse_jobs WHERE id = ?`).get(info.lastInsertRowid) as
-    | PromptReverseJobRow
-    | undefined;
-  if (row === undefined) throw new Error('prompt_reverse_jobs 插入后读回失败');
-  return toJob(row);
+  const db = getDb();
+  return db.transaction(() => {
+    const info = db
+      .prepare(
+        `INSERT INTO prompt_reverse_jobs (user_id, source_photo_id, model, status, attempt, created_at)
+         VALUES (@userId, @sourcePhotoId, @model, @status, @attempt, @createdAt)`,
+      )
+      .run(input);
+    const row = db
+      .prepare(`SELECT ${COLUMNS} FROM prompt_reverse_jobs WHERE id = ?`)
+      .get(info.lastInsertRowid) as PromptReverseJobRow | undefined;
+    if (row === undefined) throw new Error('prompt_reverse_jobs 插入后读回失败');
+    return toJob(row);
+  })();
 };
