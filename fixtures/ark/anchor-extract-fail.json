@@ -1,8 +1,16 @@
 {
-  "version": "anchor-v1",
+  "promptVersion": "anchor-v1",
   "model": "doubao-seed-2-1-turbo-260628",
   "anchorText": null,
   "features": null,
-  "verdict": "unusable",
-  "reason": "照片里没有可辨识的人脸区域，无法提取身份锚点特征"
+  "quality": {
+    "usable": false,
+    "faceDetected": false,
+    "faceCount": 0,
+    "sharpness": 0.05,
+    "readability": 0.18,
+    "damageLevel": 0.72,
+    "warnings": ["原图分辨率偏低，面部细节可能不足"],
+    "advice": "照片里没找到人脸，换一张人物正脸、别太小的试试"
+  }
 }

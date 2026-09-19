@@ -21,7 +21,7 @@ interface ChatResponse {
   choices?: Array<{ message?: { content?: string } }>;
 }
 interface ImageResponse {
-  data?: Array<{ url?: string; size?: string }>;
+  data?: Array<{ url?: string; size?: string; seed?: number }>;
   model?: string;
 }
 
@@ -116,7 +116,8 @@ export class RealArkProvider implements ArkProvider {
     const images = (data.data ?? []).map((item) => ({
       url: item.url ?? '',
       size: item.size ?? null,
-      seed: null,
+      // `seed` 仅在上游回传时记录，不作为复现依据（`spec/01` §3.10）。
+      seed: typeof item.seed === 'number' ? item.seed : null,
     }));
     if (images.length === 0) {
       throw new ArkUpstreamError({ kind: 'http', errorCode: 'EmptyData', message: 'images/generations 未返回图片' });

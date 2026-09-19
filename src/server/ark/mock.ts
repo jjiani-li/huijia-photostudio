@@ -14,10 +14,10 @@ import type {
  * 每次调用 300–800ms sleep 模拟异步。
  */
 interface AnchorExtractFixture {
-  version: string;
+  promptVersion: string;
   model: string;
-  anchorText: string | null;
-  features: AnchorFeatures | null;
+  anchorText: string;
+  features: AnchorFeatures;
 }
 interface ImageGenerationFixture {
   model: string;
@@ -54,13 +54,10 @@ export class MockArkProvider implements ArkProvider {
     await delay(SLEEP_BASE_MS + (seed % SLEEP_SPAN_MS));
 
     const fixture = readFixture<AnchorExtractFixture>('ark/anchor-extract.json');
-    if (fixture.anchorText === null || fixture.features === null) {
-      throw new ArkUpstreamError({ kind: 'http', httpStatus: 422, message: 'fixture 样本无人脸' });
-    }
     // 年龄按输入稳定替换（同一输入永远同一输出，保证测试可重复）。
     const age = AGE_MIN + (seed % AGE_SPAN);
     const features: AnchorFeatures = { ...fixture.features, ageRange: `${age - 4}-${age + 4}` };
-    const anchorText = fixture.anchorText.replace(/\d+岁/, `${age}岁`);
+    const anchorText = fixture.anchorText.replace(/\d+\s*岁/, `${age} 岁`);
     return { anchorText, features, model: fixture.model };
   }
 

@@ -35,10 +35,18 @@ describe('mapArkError · 其余分支', () => {
     expect(mapShape({ kind: 'http', httpStatus: 503 }).retryable).toBe(true);
   });
 
-  it('其它 4xx → PROVIDER_ERROR 不重试；401/403 → INTERNAL 不重试', () => {
+  it('其它 4xx（含 401/403）→ PROVIDER_ERROR 不重试', () => {
     expect(mapShape({ kind: 'http', httpStatus: 404 }).code).toBe('PROVIDER_ERROR');
     expect(mapShape({ kind: 'http', httpStatus: 404 }).retryable).toBe(false);
-    expect(mapShape({ kind: 'http', httpStatus: 401 }).code).toBe('INTERNAL');
+    expect(mapShape({ kind: 'http', httpStatus: 401 }).code).toBe('PROVIDER_ERROR');
+    expect(mapShape({ kind: 'http', httpStatus: 403 }).code).toBe('PROVIDER_ERROR');
+  });
+
+  it('InternalServiceError → PROVIDER_ERROR 可重试；InvalidParameter.NonUTF8Body → INTERNAL', () => {
+    expect(mapShape({ kind: 'http', httpStatus: 500, errorCode: 'InternalServiceError' }).retryable).toBe(true);
+    expect(mapShape({ kind: 'http', httpStatus: 400, errorCode: 'InvalidParameter.NonUTF8Body' }).code).toBe(
+      'INTERNAL',
+    );
   });
 
   it('InvalidEndpointOrModel.* → PROVIDER_ERROR 不重试', () => {

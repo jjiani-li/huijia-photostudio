@@ -53,7 +53,7 @@ export const mapArkError = (err: unknown): ArkErrorMapping => {
   if (status === 429 || (status !== undefined && status >= 500)) {
     return { code: 'PROVIDER_ERROR', retryable: true, raw };
   }
-  if (status === 401 || status === 403) return { code: 'INTERNAL', retryable: false, raw };
+  // `modules/M06` §5.8：「其他 HTTP 4xx → PROVIDER_ERROR ❌」——401/403 也落这里（表里没有为它们单列一行）。
   if (status !== undefined && status >= 400) return { code: 'PROVIDER_ERROR', retryable: false, raw };
 
   return { code: 'INTERNAL', retryable: false, raw };
