@@ -35,3 +35,14 @@ export const parseJson = async <T>(req: Request, schema: z.ZodType<T>): Promise<
   }
   return parse(schema, body);
 };
+
+/** 路径段 / 查询参数里的正整数（如 `:id`）；不是正整数 → `INVALID_PARAM`。 */
+export const parsePositiveInt = (raw: string, field: string): number => {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new AppError('INVALID_PARAM', ERROR_MESSAGE.INVALID_PARAM, ERROR_STATUS.INVALID_PARAM, {
+      fields: { [field]: ['必须是正整数'] },
+    });
+  }
+  return value;
+};
