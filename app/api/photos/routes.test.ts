@@ -4,7 +4,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { NextRequest } from 'next/server';
-import { photoSchema, qualitySchema } from '../../../src/shared/types';
+import { photoListSchema, photoSchema, qualitySchema } from '../../../src/shared/types';
 import { closeDb } from '../../../src/server/db/connection';
 import { runMigrations } from '../../../src/server/db/migrate';
 import { runSeed } from '../../../src/server/db/seed';
@@ -12,7 +12,7 @@ import { buildKey, getStorage, resetStorage } from '../../../src/server/storage'
 import { insertPhoto } from '../../../src/server/db/repositories/photos';
 import { nowIso } from '../../../src/server/domain/time';
 import { SID_COOKIE, createSession } from '../../../src/server/auth/session';
-import { POST } from './route';
+import { POST, GET as LIST } from './route';
 import { DELETE } from './[id]/route';
 import { GET } from './[id]/file/route';
 import { POST as PREPROC } from './[id]/preprocess/route';
@@ -243,5 +243,26 @@ describe('POST /api/photos/:id/preprocess', () => {
     );
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('INVALID_PARAM');
+  });
+});
+
+describe('GET /api/photos · 未呈现的照片（T13、§3.2）', () => {
+  it('200 且通过 photoListSchema；刚上传、没走完流程的照片在这里可见且 url 带 ?w=400', async () => {
+    const uploaded = photoSchema.parse(
+      ((await (await upload(await jpeg(320, 240))).json()) as { photo: unknown }).photo,
+    );
+    const res = await LIST(asReq(new Request('http://localhost/api/photos?limit=50')), ctx({}));
+    expect(res.status).toBe(200);
+    const body = photoListSchema.parse(await res.json());
+    expect(body.items.some((photo) => photo.id === uploaded.id)).toBe(true);
+    expect(body.items.every((photo) => photo.url.includes('?w=400'))).toBe(true);
+  });
+
+  it('越界 limit / 非法 cursor → 400 INVALID_PARAM', async () => {
+    for (const query of ['?limit=0', '?limit=51', '?cursor=xxx']) {
+      const res = await LIST(asReq(new Request(`http://localhost/api/photos${query}`)), ctx({}));
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('INVALID_PARAM');
+    }
   });
 });

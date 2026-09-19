@@ -217,6 +217,22 @@ export const toGenerationDto = (record: GenerationRecord): Generation => ({
   results: generations.listResultsByGeneration(record.id).map(toResultDto),
 });
 
+/**
+ * `POST /api/results/:id/feedback`（`spec/03-接口契约.md` §3.5）：写 `user_feedback`，
+ * 返回该结果的最新 DTO。不是自己的资源 → `404 NOT_FOUND`（`API-04`）。
+ */
+export const setResultFeedback = (
+  userId: number,
+  resultId: number,
+  feedback: 1 | -1 | -2 | null,
+): Generation['results'][number] => {
+  if (generations.findResultForUser(userId, resultId) === null) throw appError('NOT_FOUND');
+  generations.updateResultFeedback(resultId, feedback);
+  const updated = generations.findResultForUser(userId, resultId);
+  if (updated === null) throw appError('INTERNAL', { reason: 'feedback 后读回失败' });
+  return toResultDto(updated);
+};
+
 /** `GET /api/generations/:id`（`spec/03-接口契约.md` §3.5）：不是自己的资源一律 `404 NOT_FOUND`。 */
 export const readGenerationForUser = (userId: number, id: number): Generation => {
   const record = generations.findByIdForUser(userId, id);

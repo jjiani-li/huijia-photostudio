@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server';
 import { ok, withErrorHandling, type RouteContext } from '../../../../src/server/http/respond';
 import { parsePositiveInt } from '../../../../src/server/http/validate';
 import { requireUser } from '../../../../src/server/auth/session';
-import { deletePhoto } from '../../../../src/server/domain/photoService';
+import { deletePhoto } from '../../../../src/server/domain/deletionService';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';

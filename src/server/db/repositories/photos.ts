@@ -271,3 +271,101 @@ export const hardDeletePhoto = (id: number): number => {
   const db = getDb();
   return db.transaction(() => db.prepare('DELETE FROM photos WHERE id = ?').run(id).changes)();
 };
+
+// ── `tickets/T13`：级联软删、历史互补查询与物理清理的批量 SQL ─────────────────────────
+
+const placeholders = (count: number): string => new Array(count).fill('?').join(', ');
+
+/** 不限归属的按 id 读（`DELETE /api/photos/:id` 区分「他人资源 404」与「已物理清理 200」用）。 */
+export const findPhotoById = (id: number): PhotoRecord | null => {
+  const row = getDb().prepare(`SELECT ${COLUMNS} FROM photos WHERE id = ?`).get(id) as
+    | PhotoRow
+    | undefined;
+  return row === undefined ? null : toPhoto(row);
+};
+
+/** 原图派生的预处理图 id（`modules/M08` §3.3 的 `original` 行）。 */
+export const listPreprocessedIdsBySource = (sourcePhotoId: number): number[] =>
+  (
+    getDb()
+      .prepare("SELECT id FROM photos WHERE source_photo_id = ? AND kind = 'preprocessed'")
+      .all(sourcePhotoId) as { id: number }[]
+  ).map((row) => row.id);
+
+/** 批量软删（幂等：`deleted_at IS NULL` 才动），返回实际标记的行数。 */
+export const softDeletePhotos = (ids: number[], deletedAt: Iso): number => {
+  if (ids.length === 0) return 0;
+  const db = getDb();
+  return db.transaction(
+    () =>
+      db
+        .prepare(
+          `UPDATE photos SET deleted_at = ?
+           WHERE id IN (${placeholders(ids.length)}) AND deleted_at IS NULL`,
+        )
+        .run(deletedAt, ...ids).changes,
+  )();
+};
+
+/** 某批 generations 名下 `generation_results.photo_id` 指向的 `kind='generated'` 图 id。 */
+export const listGeneratedIdsByGenerationIds = (generationIds: number[]): number[] => {
+  if (generationIds.length === 0) return [];
+  return (
+    getDb()
+      .prepare(
+        `SELECT DISTINCT p.id FROM generation_results r JOIN photos p ON p.id = r.photo_id
+         WHERE r.generation_id IN (${placeholders(generationIds.length)}) AND p.kind = 'generated'`,
+      )
+      .all(...generationIds) as { id: number }[]
+  ).map((row) => row.id);
+};
+
+/** 批量物理删（`runPurge()` 与级联的终态清理），返回命中行数。 */
+export const hardDeletePhotos = (ids: number[]): number => {
+  if (ids.length === 0) return 0;
+  const db = getDb();
+  return db.transaction(
+    () =>
+      db.prepare(`DELETE FROM photos WHERE id IN (${placeholders(ids.length)})`).run(...ids).changes,
+  )();
+};
+
+/**
+ * `GET /api/photos` 的互补查询（`spec/03-接口契约.md` §3.2、`modules/M08` §3.2）：
+ * 未软删、且**不出现在 `/api/history` 呈现集**里的照片，按 `(created_at, id) DESC` 分页。
+ * 呈现集 = 每个 `status='succeeded'` 且仍有未软删输入图的锚点的「第一个未软删输入图」、
+ * 它的预处理图、以及该锚点 generations 下 results 指向的生成图。游标与历史各走一套（不通用）。
+ */
+export const listUnpresentedActivePhotos = (
+  userId: number,
+  opts: { limit: number; cursorCreatedAt: string | null; cursorId: number | null },
+): PhotoRecord[] => {
+  const sql = `
+    SELECT ${COLUMNS} FROM photos p
+    WHERE p.user_id = @userId AND p.deleted_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM identity_anchors a
+        WHERE a.user_id = @userId AND a.status = 'succeeded'
+          AND EXISTS (
+            SELECT 1 FROM json_each(a.input_photo_ids) je
+            JOIN photos ip ON ip.id = je.value AND ip.deleted_at IS NULL)
+          AND (
+            a.preprocessed_photo_id = p.id
+            OR p.id = (
+              SELECT je2.value FROM json_each(a.input_photo_ids) je2
+              JOIN photos ip2 ON ip2.id = je2.value AND ip2.deleted_at IS NULL LIMIT 1)
+            OR EXISTS (
+              SELECT 1 FROM generations g JOIN generation_results r ON r.generation_id = g.id
+              WHERE g.anchor_id = a.id AND r.photo_id = p.id)))
+      AND (@cursorCreatedAt IS NULL OR (p.created_at, p.id) < (@cursorCreatedAt, @cursorId))
+    ORDER BY p.created_at DESC, p.id DESC
+    LIMIT @limit`;
+  return (
+    getDb().prepare(sql).all({
+      userId,
+      cursorCreatedAt: opts.cursorCreatedAt,
+      cursorId: opts.cursorId,
+      limit: opts.limit,
+    }) as PhotoRow[]
+  ).map(toPhoto);
+};

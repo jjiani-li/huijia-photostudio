@@ -281,3 +281,65 @@ export const markConfirmed = (id: number, confirmedAt: Iso): void => {
         .run({ id, confirmedAt }),
     )();
 };
+
+// ── `tickets/T13`：历史分页与级联解析的批量 SQL ───────────────────────────────────────
+
+/**
+ * 历史分页（`modules/M08` §3.4）：只取 `status='succeeded'` 且**仍有未软删输入图**的锚点，
+ * 按 `(created_at, id) DESC` 走游标。`limit` 由调用方按「+1 探测下一页」传入。
+ */
+export const listHistoryByUser = (
+  userId: number,
+  opts: { limit: number; cursorCreatedAt: string | null; cursorId: number | null },
+): AnchorRecord[] => {
+  const sql = `
+    SELECT ${COLUMNS} FROM identity_anchors a
+    WHERE a.user_id = @userId AND a.status = 'succeeded'
+      AND EXISTS (
+        SELECT 1 FROM json_each(a.input_photo_ids) je JOIN photos p ON p.id = je.value
+        WHERE p.user_id = a.user_id AND p.deleted_at IS NULL)
+      AND (@cursorCreatedAt IS NULL OR (a.created_at, a.id) < (@cursorCreatedAt, @cursorId))
+    ORDER BY a.created_at DESC, a.id DESC
+    LIMIT @limit`;
+  return (
+    getDb().prepare(sql).all({
+      userId,
+      cursorCreatedAt: opts.cursorCreatedAt,
+      cursorId: opts.cursorId,
+      limit: opts.limit,
+    }) as AnchorRow[]
+  ).map(toAnchor);
+};
+
+/**
+ * 受影响锚点（`modules/M08` §3.3 的级联解析顺序第 ② 步）：
+ * `byPreprocessedOnly=false`（原图级联）→ `preprocessed_photo_id = :photoId` 或 `input_photo_ids` 含 `:photoId`；
+ * `true`（预处理图级联）→ 仅 `preprocessed_photo_id = :photoId`。返回锚点 id 列表。
+ */
+export const listAffectedIds = (
+  userId: number,
+  photoId: number,
+  byPreprocessedOnly: boolean,
+): number[] => {
+  const condition = byPreprocessedOnly
+    ? 'a.preprocessed_photo_id = @photoId'
+    : `(a.preprocessed_photo_id = @photoId
+        OR EXISTS (SELECT 1 FROM json_each(a.input_photo_ids) je WHERE je.value = @photoId))`;
+  return (
+    getDb()
+      .prepare(`SELECT a.id FROM identity_anchors a WHERE a.user_id = @userId AND ${condition}`)
+      .all({ userId, photoId }) as { id: number }[]
+  ).map((row) => row.id);
+};
+
+/** 批量物理 DELETE（`identity_anchors` 无 `deleted_at` 列，`modules/M08` §3.3），返回命中行数。 */
+export const hardDeleteAnchors = (ids: number[]): number => {
+  if (ids.length === 0) return 0;
+  const db = getDb();
+  return db.transaction(
+    () =>
+      db
+        .prepare(`DELETE FROM identity_anchors WHERE id IN (${new Array(ids.length).fill('?').join(', ')})`)
+        .run(...ids).changes,
+  )();
+};

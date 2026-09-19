@@ -172,3 +172,36 @@ export const insert = (input: InsertPromptReverseJobInput): PromptReverseJobReco
     return toJob(row);
   })();
 };
+
+/**
+ * 批量物理 DELETE（`modules/M08` §3.3：反推任务按 `user_id` + `source_photo_id` 级联），返回命中行数。
+ * `runPurge()` 的批次（软删照片 id）与两个 `DELETE` 端点的受影响照片集合都走这里。
+ */
+export const hardDeleteBySourcePhotos = (userId: number, photoIds: number[]): number => {
+  if (photoIds.length === 0) return 0;
+  const db = getDb();
+  return db.transaction(
+    () =>
+      db
+        .prepare(
+          `DELETE FROM prompt_reverse_jobs
+           WHERE user_id = ? AND source_photo_id IN (${new Array(photoIds.length).fill('?').join(', ')})`,
+        )
+        .run(userId, ...photoIds).changes,
+  )();
+};
+
+/** `runPurge()` 的批次清理（`modules/M08` §5.3 步骤 ③）：按照片 id 批量删，不限 `user_id`。 */
+export const hardDeleteBySourcePhotoIds = (photoIds: number[]): number => {
+  if (photoIds.length === 0) return 0;
+  const db = getDb();
+  return db.transaction(
+    () =>
+      db
+        .prepare(
+          `DELETE FROM prompt_reverse_jobs
+           WHERE source_photo_id IN (${new Array(photoIds.length).fill('?').join(', ')})`,
+        )
+        .run(...photoIds).changes,
+  )();
+};

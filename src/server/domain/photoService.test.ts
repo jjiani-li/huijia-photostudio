@@ -8,7 +8,8 @@ import { runMigrations } from '../db/migrate';
 import { runSeed } from '../db/seed';
 import { resetStorage } from '../storage';
 import { insertContentReview } from '../db/repositories/reviews';
-import { deletePhoto, readPhotoForUser, uploadPhoto, type UploadFile } from './photoService';
+import { deletePhoto } from './deletionService';
+import { readPhotoForUser, uploadPhoto, type UploadFile } from './photoService';
 
 vi.mock('../db/repositories/reviews', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../db/repositories/reviews')>();

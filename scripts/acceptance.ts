@@ -26,6 +26,8 @@ import { readFixture } from '../src/server/ark/fixtures';
 import { AIGC_MARKER, readPngText } from '../src/server/images/mark';
 import { buildKey, getStorage } from '../src/server/storage';
 import { confirmAnchor, revokeConsents } from '../src/server/domain/anchorService';
+import { deletePhoto } from '../src/server/domain/deletionService';
+import { historyListSchema } from '../src/shared/types';
 import {
   assertAnchorGeneratable,
   createGeneration,
@@ -47,11 +49,15 @@ import { AppError } from '../src/server/domain/errors';
 import { dayKey, nowIso } from '../src/server/domain/time';
 import { reclaimStale } from '../src/jobs/worker';
 import { runGenerateJob } from '../src/jobs/handlers/generate';
+import { runPurge } from '../src/jobs/handlers/purge';
 import { heartbeatPath, writeHeartbeat } from '../src/jobs/heartbeat';
 import { SID_COOKIE, createSession, hashToken } from '../src/server/auth/session';
 import { GET as getEraSceneConfig } from '../app/api/config/era-scene/route';
 import { GET as getHealth } from '../app/api/health/route';
 import { GET as getMe } from '../app/api/me/route';
+import { GET as getHistory } from '../app/api/history/route';
+import { DELETE as deletePhotoRoute } from '../app/api/photos/[id]/route';
+import { GET as getPhotoFile } from '../app/api/photos/[id]/file/route';
 import { POST as postAuthCode } from '../app/api/auth/code/route';
 import { POST as postPhoto } from '../app/api/photos/route';
 
@@ -496,7 +502,7 @@ checks.push(
     },
   },
   {
-    // `API-05` 的另一半（`/api/history` 响应无明文手机号/邮箱）随 `tickets/T13` 的该端点落地后补（见 T12 §Comments）。
+    // `API-05`：`/api/me` 的脱敏 + `/api/history` 响应体内无明文手机号 / 邮箱（`tickets/T13` 补齐后半）。
     id: 'API-05',
     run: async () => {
       const res = await getMe(authedRequest('http://localhost/api/me'), { params: Promise.resolve({}) });
@@ -510,10 +516,19 @@ checks.push(
       const masked = phone === '138****0000';
       const noPlain = !serialized.includes('13800000000');
       const quotaOk = typeof body.quota?.limit === 'number';
+
+      const historyRes = await getHistory(authedRequest('http://localhost/api/history?limit=50'), {
+        params: Promise.resolve({}),
+      });
+      const historyBody = (await historyRes.json()) as { items?: unknown };
+      const historyClean =
+        historyRes.status === 200 &&
+        !JSON.stringify(historyBody).includes('13800000000') &&
+        !JSON.stringify(historyBody).includes('@');
       return {
-        ok: res.status === 200 && masked && noPlain && quotaOk,
-        expected: '200；user.phone === 138****0000 且无明文；quota.limit 为数值',
-        actual: `status=${res.status} phone=${String(phone)} 无明文=${noPlain} limit=${String(body.quota?.limit)}`,
+        ok: res.status === 200 && masked && noPlain && quotaOk && historyClean,
+        expected: '200；user.phone === 138****0000 且无明文；quota.limit 为数值；/api/history 无明文手机号/邮箱',
+        actual: `status=${res.status} phone=${String(phone)} 无明文=${noPlain} limit=${String(body.quota?.limit)} history=${historyRes.status}/clean=${historyClean}`,
       };
     },
   },
@@ -1343,6 +1358,222 @@ checks.push(
           fs.writeFileSync(SAFETY_FIXTURE, original, 'utf8');
         }
       }),
+  },
+);
+
+// ── `tickets/T13` 历史链路、级联删除与物理清理（`modules/M08-账号历史与彻底删除.md` §4–6）──
+// `DEL-01`–`DEL-04`、`CMP-05`：进程内直调 history / photos / purge，链路用真实生成跑通（自带清理）。
+
+const ONE_HOUR_AGO = new Date(Date.now() - 3_600_000).toISOString();
+
+const readHistory = async (): Promise<ReturnType<typeof historyListSchema.parse>> =>
+  historyListSchema.parse(
+    await (
+      await getHistory(authedRequest('http://localhost/api/history?limit=50'), { params: Promise.resolve({}) })
+    ).json(),
+  );
+
+/** 造一张「盘上有文件、已软删且早于宽限期」的照片，供 purge 用例；自带清理。 */
+const makePurgeablePhoto = async (): Promise<{ id: number; storageKey: string }> => {
+  const buffer = await sharp({
+    create: { width: 32, height: 32, channels: 3, background: { r: 10, g: 20, b: 30 } },
+  })
+    .png()
+    .toBuffer();
+  const key = buildKey(DEV_USER, 'png');
+  await getStorage().save(key, buffer);
+  const photo = insertPhoto({
+    userId: DEV_USER,
+    kind: 'original',
+    storageKey: key,
+    mime: 'image/png',
+    bytes: buffer.length,
+    width: 32,
+    height: 32,
+    sha256: sha256(buffer),
+    sourcePhotoId: null,
+    qualityJson: null,
+    createdAt: nowIso(),
+  });
+  getDb().prepare('UPDATE photos SET deleted_at = ? WHERE id = ?').run(ONE_HOUR_AGO, photo.id);
+  cleanups.push(() => {
+    try {
+      fs.rmSync(getStorage().resolveAbs(key), { force: true });
+    } catch {
+      /* 文件已被清理也不影响判定 */
+    }
+  });
+  cleanups.push(() => getDb().prepare('DELETE FROM photos WHERE id = ?').run(photo.id));
+  return { id: photo.id, storageKey: key };
+};
+
+/** 完整可删链路：原图 → 预处理图（盘上有文件）→ 已确认锚点 → 生成任务跑出结果。 */
+const makeDeletableChain = async (): Promise<{ original: number; anchorId: number }> => {
+  raiseQuotaForGenerationChecks();
+  snapshotUsage();
+  const preprocessed = await makePreprocessedWithFile();
+  const original = insertPhoto({
+    userId: DEV_USER,
+    kind: 'original',
+    storageKey: `u${DEV_USER}/acceptance-${Math.random().toString(16).slice(2)}.jpg`,
+    mime: 'image/jpeg',
+    bytes: 1,
+    width: 1600,
+    height: 1200,
+    sha256: 'c'.repeat(64),
+    sourcePhotoId: null,
+    qualityJson: null,
+    createdAt: nowIso(),
+  });
+  cleanups.push(() => getDb().prepare('DELETE FROM photos WHERE id = ?').run(original.id));
+
+  const anchorId = insertAnchor({
+    userId: DEV_USER,
+    inputPhotoIds: [original.id],
+    preprocessedPhotoId: preprocessed,
+    status: 'succeeded',
+    attempt: 0,
+    model: 'mock-model',
+    promptVersion: 'anchor-v1',
+    quality: null,
+    createdAt: nowIso(),
+  }).id;
+  getDb()
+    .prepare(
+      `UPDATE identity_anchors SET anchor_text = ?, features_json = ?, confirmed_by_user = 1,
+              confirmed_at = ? WHERE id = ?`,
+    )
+    .run(ANCHOR_SAMPLE.anchorText, JSON.stringify(ANCHOR_SAMPLE.features), nowIso(), anchorId);
+  getDb()
+    .prepare("INSERT INTO consents (user_id, scope, anchor_id, agreed_at) VALUES (?, 'photo_usage', ?, ?)")
+    .run(DEV_USER, anchorId, nowIso());
+  cleanups.push(() => {
+    getDb().prepare('DELETE FROM consents WHERE anchor_id = ?').run(anchorId);
+    getDb().prepare('DELETE FROM audit_logs WHERE target = ?').run(`anchor:${anchorId}`);
+    hardDeleteAnchor(anchorId, DEV_USER);
+  });
+
+  const photosBefore = new Set(
+    (getDb().prepare('SELECT id FROM photos').all() as { id: number }[]).map((row) => row.id),
+  );
+  const generationId = (await createFor(anchorId, 2)).id;
+  const record = findGenerationById(generationId);
+  if (record !== null) await runGenerateJob(record);
+  cleanups.push(() =>
+    purgeGeneration(
+      generationId,
+      (getDb().prepare('SELECT id FROM photos').all() as { id: number }[])
+        .map((row) => row.id)
+        .filter((id) => !photosBefore.has(id)),
+    ),
+  );
+  return { original: original.id, anchorId };
+};
+
+checks.push(
+  {
+    id: 'DEL-01',
+    run: async () => {
+      const chain = await makeDeletableChain();
+      const seenBefore = (await readHistory()).items.some((item) => item.anchorId === chain.anchorId);
+      const res = await deletePhotoRoute(
+        authedRequest(`http://localhost/api/photos/${chain.original}`, { method: 'DELETE' }),
+        { params: Promise.resolve({ id: String(chain.original) }) },
+      );
+      const body = (await res.json()) as { ok: boolean; cascaded: Record<string, number> };
+      const seenAfter = (await readHistory()).items.some((item) => item.anchorId === chain.anchorId);
+      const anchorGone =
+        (getDb().prepare('SELECT COUNT(*) AS n FROM identity_anchors WHERE id = ?').get(chain.anchorId) as {
+          n: number;
+        }).n === 0;
+      const ok =
+        res.status === 200 &&
+        seenBefore &&
+        !seenAfter &&
+        anchorGone &&
+        (body.cascaded.anchors ?? 0) >= 1 &&
+        (body.cascaded.generations ?? 0) >= 1 &&
+        (body.cascaded.results ?? 0) >= 1;
+      return {
+        ok,
+        expected: 'DELETE 后该锚点从 /api/history 消失、级联计数非零',
+        actual: `before=${seenBefore} after=${seenAfter} status=${res.status} cascaded=${JSON.stringify(body.cascaded)}`,
+      };
+    },
+  },
+  {
+    id: 'DEL-02',
+    run: async () => {
+      const chain = await makeDeletableChain();
+      deletePhoto({ userId: DEV_USER, photoId: chain.original });
+      const res = await getPhotoFile(
+        authedRequest(`http://localhost/api/photos/${chain.original}/file`),
+        { params: Promise.resolve({ id: String(chain.original) }) },
+      );
+      return { ok: res.status === 404, expected: '删除后取图 → 404', actual: `status=${res.status}` };
+    },
+  },
+  {
+    id: 'DEL-03',
+    run: async () => {
+      const photo = await makePurgeablePhoto();
+      const result = await runPurge();
+      const rowGone =
+        (getDb().prepare('SELECT COUNT(*) AS n FROM photos WHERE id = ?').get(photo.id) as { n: number }).n === 0;
+      const fileGone = !fs.existsSync(getStorage().resolveAbs(photo.storageKey));
+      return {
+        ok: result.purged >= 1 && rowGone && fileGone,
+        expected: 'runPurge() 后文件与 photos 行物理消失',
+        actual: `purged=${result.purged} rowGone=${rowGone} fileGone=${fileGone}`,
+      };
+    },
+  },
+  {
+    id: 'DEL-04',
+    run: async () => {
+      const id = insertPhoto({
+        userId: DEV_USER,
+        kind: 'original',
+        storageKey: `u${DEV_USER}/acceptance-audit-${Math.random().toString(16).slice(2)}.jpg`,
+        mime: 'image/jpeg',
+        bytes: 1,
+        width: 800,
+        height: 600,
+        sha256: 'b'.repeat(64),
+        sourcePhotoId: null,
+        qualityJson: null,
+        createdAt: nowIso(),
+      }).id;
+      cleanups.push(() => getDb().prepare('DELETE FROM photos WHERE id = ?').run(id));
+      deletePhoto({ userId: DEV_USER, photoId: id });
+      await makePurgeablePhoto();
+      await runPurge();
+
+      const deletes = (getDb().prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'photo.delete'").get() as {
+        n: number;
+      }).n;
+      const purges = (getDb().prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'photo.purge'").get() as {
+        n: number;
+      }).n;
+      return {
+        ok: deletes >= 1 && purges >= 1,
+        expected: 'audit_logs 存在 photo.delete 与 photo.purge',
+        actual: `photo.delete=${deletes} photo.purge=${purges}`,
+      };
+    },
+  },
+  {
+    id: 'CMP-05',
+    run: async () => {
+      await makePurgeablePhoto();
+      const first = await runPurge();
+      const second = await runPurge();
+      return {
+        ok: first.purged >= 1 && second.scanned === 0 && second.purged === 0,
+        expected: '第二次 runPurge() 返回 scanned=0 / purged=0',
+        actual: `第一次 purged=${first.purged}，第二次 scanned=${second.scanned} purged=${second.purged}`,
+      };
+    },
   },
 );
 

@@ -9,8 +9,8 @@ import {
   insertPreprocessed,
   type PhotoRecord,
 } from '../db/repositories/photos';
-import { findByIdForUser, hardDeleteAnchor, insert, markConfirmed, type AnchorRecord } from '../db/repositories/anchors';
-import { ensureActive, revokeByAnchor, revokeByScope } from '../db/repositories/consents';
+import { findByIdForUser, insert, markConfirmed, type AnchorRecord } from '../db/repositories/anchors';
+import { ensureActive, revokeByScope } from '../db/repositories/consents';
 import { audit } from '../security/audit';
 import { buildAnalysisInput, normalize } from '../images/preprocess';
 import { scoreQuality } from '../images/quality';
@@ -334,29 +334,3 @@ export const confirmAnchor = (
  */
 export const revokeConsents = (userId: number, scope: ConsentScope): number =>
   revokeByScope(userId, scope, nowIso());
-
-/**
- * `DELETE /api/anchors/:id`（`docs/prd/modules/M04-身份确认与授权.md` §5.4）：幂等物理删除该锚点行
- * + 吊销其有效授权 + 写 `anchor.delete` 审计。`identity_anchors` 无 `deleted_at` 列，故是物理 DELETE。
- * 级联（`generations` / `generation_results` / generated 照片 / 反推任务）归 `tickets/T13` 的
- * `deletionService`，届时本函数迁入其中（`cascaded` 键名不变，`spec/03-接口契约.md` §3.3）。
- */
-export const deleteAnchor = (params: {
-  userId: number;
-  anchorId: number;
-}): { ok: true; cascaded: { generations: number; results: number } } => {
-  return getDb().transaction(() => {
-    const existing = findByIdForUser(params.userId, params.anchorId);
-    if (existing === null) throw appError('ANCHOR_NOT_FOUND');
-    const at = nowIso();
-    // consents 不删行，命中该锚点的有效行写 revoked_at（§5.5、`modules/M08` §3.3）。
-    revokeByAnchor(params.anchorId, at);
-    hardDeleteAnchor(params.anchorId, params.userId);
-    const cascaded = { generations: 0, results: 0 };
-    audit(
-      { userId: params.userId, action: 'anchor.delete', target: `anchor:${params.anchorId}`, meta: cascaded },
-      at,
-    );
-    return { ok: true as const, cascaded };
-  }).immediate();
-};

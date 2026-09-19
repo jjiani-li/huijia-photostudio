@@ -348,3 +348,106 @@ export const requeueForRetry = (id: number, attempt: number, errorCode: string, 
         .run({ id, attempt, errorCode, errorMessage }),
     )();
 };
+
+// ── `tickets/T13`：历史分页、级联解析与反馈写入的批量 SQL ─────────────────────────────
+
+const placeholders = (count: number): string => new Array(count).fill('?').join(', ');
+
+/** 受影响 `generations` id（`modules/M08` §3.3 第 ③ 步：`anchor_id IN (:anchorIds)`）。 */
+export const listIdsByAnchorIds = (anchorIds: number[]): number[] => {
+  if (anchorIds.length === 0) return [];
+  return (
+    getDb()
+      .prepare(`SELECT id FROM generations WHERE anchor_id IN (${placeholders(anchorIds.length)})`)
+      .all(...anchorIds) as { id: number }[]
+  ).map((row) => row.id);
+};
+
+/**
+ * 每锚点最近 `perAnchor` 条（`modules/M08` §3.4 的窗口函数）：`/api/history` 的
+ * `HistoryItem.generations` 用它取「最近 10 条」。返回记录按 `(anchor_id, created_at DESC, id DESC)`。
+ */
+export const listRecentByAnchors = (
+  userId: number,
+  anchorIds: number[],
+  perAnchor: number,
+): GenerationRecord[] => {
+  if (anchorIds.length === 0) return [];
+  const sql = `
+    SELECT ${COLUMNS} FROM (
+      SELECT g.*, ROW_NUMBER() OVER (PARTITION BY g.anchor_id ORDER BY g.created_at DESC, g.id DESC) AS rn
+      FROM generations g WHERE g.user_id = ? AND g.anchor_id IN (${placeholders(anchorIds.length)})
+    ) WHERE rn <= ?`;
+  return (
+    getDb()
+      .prepare(sql)
+      .all(userId, ...anchorIds, perAnchor) as GenerationRow[]
+  ).map(toGeneration);
+};
+
+/** 批量物理 DELETE `generations`（`modules/M08` §3.3），返回命中行数。 */
+export const hardDeleteGenerations = (ids: number[]): number => {
+  if (ids.length === 0) return 0;
+  const db = getDb();
+  return db.transaction(
+    () =>
+      db.prepare(`DELETE FROM generations WHERE id IN (${placeholders(ids.length)})`).run(...ids).changes,
+  )();
+};
+
+/** `generation_results` 行数（`cascaded.results` 在删除前记数，`modules/M08` §5.2）。 */
+export const countResultsByGenerationIds = (generationIds: number[]): number => {
+  if (generationIds.length === 0) return 0;
+  return (
+    getDb()
+      .prepare(
+        `SELECT COUNT(*) AS n FROM generation_results WHERE generation_id IN (${placeholders(generationIds.length)})`,
+      )
+      .get(...generationIds) as { n: number }
+  ).n;
+};
+
+/** 批量物理 DELETE `generation_results`（与 `generations` 同一事务，`spec/01` §2.3），返回命中行数。 */
+export const deleteResultsByGenerationIds = (generationIds: number[]): number => {
+  if (generationIds.length === 0) return 0;
+  const db = getDb();
+  return db.transaction(
+    () =>
+      db
+        .prepare(`DELETE FROM generation_results WHERE generation_id IN (${placeholders(generationIds.length)})`)
+        .run(...generationIds).changes,
+  )();
+};
+
+/** 兜底清理孤儿结果行（`modules/M08` §5.3 步骤 ③），返回命中行数。 */
+export const deleteOrphanResults = (): number =>
+  getDb()
+    .transaction(
+      () =>
+        getDb()
+          .prepare('DELETE FROM generation_results WHERE generation_id NOT IN (SELECT id FROM generations)')
+          .run().changes,
+    )();
+
+/** 结果行的归属读（`POST /api/results/:id/feedback`）：不是自己的资源一律 `null` → `404`。 */
+export const findResultForUser = (userId: number, resultId: number): GenerationResultRecord | null => {
+  const row = getDb()
+    .prepare(
+      `SELECT ${RESULT_COLUMNS} FROM generation_results r
+       JOIN photos p ON p.id = r.photo_id
+       JOIN generations g ON g.id = r.generation_id
+       WHERE r.id = ? AND g.user_id = ?`,
+    )
+    .get(resultId, userId) as GenerationResultRow | undefined;
+  return row === undefined ? null : toResult(row);
+};
+
+/** 写 `generation_results.user_feedback`（`spec/03-接口契约.md` §3.5）；`null` 表示清除反馈。 */
+export const updateResultFeedback = (resultId: number, feedback: number | null): void => {
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare('UPDATE generation_results SET user_feedback = @feedback WHERE id = @resultId')
+        .run({ resultId, feedback }),
+    )();
+};

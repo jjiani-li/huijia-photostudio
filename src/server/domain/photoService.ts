@@ -10,16 +10,15 @@ import { callModeration, recordModeration } from '../security/moderation';
 import {
   findActiveOriginalBySha256,
   findActivePhotoForUser,
-  findPhotoForUser,
   insertPhoto,
   softDeletePhoto,
   type PhotoRecord,
 } from '../db/repositories/photos';
-import type { Iso, Photo } from '../../shared/types';
+import type { Photo } from '../../shared/types';
 
 /**
  * 照片上传 / 读图的编排与事务边界（`docs/prd/modules/M01-照片资产与存储.md` §6）。
- * `DELETE` 只做最小软删 + 审计；级联软删与 `runPurge()` 归 `tickets/T13`。
+ * 级联软删归 `tickets/T13` 的 `deletionService`（`spec/03-接口契约.md` §3.2）。
  */
 const MIME_EXT: Record<string, ImageExt> = {
   'image/jpeg': 'jpg',
@@ -27,16 +26,6 @@ const MIME_EXT: Record<string, ImageExt> = {
   'image/webp': 'webp',
   'image/heic': 'heic',
 };
-
-/** 上传阶段内容审核被拒前的级联计数（`spec/03-接口契约.md` §3.2）；本模块恒为零。 */
-export interface Cascaded {
-  preprocessed: number;
-  anchors: number;
-  generations: number;
-  results: number;
-}
-
-const ZERO_CASCADE: Cascaded = { preprocessed: 0, anchors: 0, generations: 0, results: 0 };
 
 const maxUploadBytes = (): number => Number(process.env.MAX_UPLOAD_MB ?? 20) * 1024 * 1024;
 
@@ -52,6 +41,12 @@ export const toPhotoDto = (record: PhotoRecord): Photo => ({
   sha256: record.sha256,
   createdAt: record.createdAt,
 });
+
+/** 列表 / 历史响应用的缩略图 DTO：`url` 一律带 `?w=400`（`modules/M08` §4）。 */
+export const toPhotoThumbDto = (record: PhotoRecord): Photo => {
+  const dto = toPhotoDto(record);
+  return { ...dto, url: `${dto.url}?w=400` };
+};
 
 /** `File` 的最小形状（避免在 Node 侧依赖 DOM 的 `File` 类型）。 */
 export interface UploadFile {
@@ -207,28 +202,4 @@ export const readPhotoForUser = async (params: {
     .jpeg({ quality: 80 })
     .toBuffer();
   return { body: resized, contentType: 'image/jpeg', generated };
-};
-
-/** `DELETE /api/photos/:id`（`modules/M01` §6.3）：软删 + 审计；级联计数归 `tickets/T13`。 */
-export const deletePhoto = (params: {
-  userId: number;
-  photoId: number;
-}): { ok: true; cascaded: Cascaded } => {
-  const db = getDb();
-  return db.transaction(() => {
-    const photo = findPhotoForUser(params.photoId, params.userId);
-    if (photo === null) throw appError('NOT_FOUND');
-    if (photo.deletedAt !== null) return { ok: true as const, cascaded: ZERO_CASCADE };
-    const deletedAt: Iso = nowIso();
-    softDeletePhoto(photo.id, deletedAt);
-    audit(
-      {
-        action: 'photo.delete',
-        userId: params.userId,
-        target: `photo:${photo.id}`,
-      },
-      deletedAt,
-    );
-    return { ok: true as const, cascaded: ZERO_CASCADE };
-  })();
 };

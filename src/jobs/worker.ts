@@ -4,6 +4,7 @@ import * as generationsRepo from '../server/db/repositories/generations';
 import * as reverseJobsRepo from '../server/db/repositories/promptReverseJobs';
 import { isoMinutesAgo, nowIso } from '../server/domain/time';
 import { HEARTBEAT_INTERVAL_MS, writeHeartbeat } from './heartbeat';
+import { PURGE_INTERVAL_MS, runPurge } from './handlers/purge';
 import {
   JOB_HANDLERS,
   TASK_SOURCES,
@@ -160,6 +161,19 @@ export const requestStop = (): void => {
   running = false;
 };
 
+/**
+ * 清一轮软删照片（`docs/prd/modules/M08-账号历史与彻底删除.md` §5.3）：异常必须被吞掉，
+ * 记日志后返回——**绝不中断 worker**。
+ */
+export const safePurge = async (): Promise<void> => {
+  try {
+    const result = await runPurge();
+    log('info', 'purge done', { ...result });
+  } catch (err) {
+    log('error', 'purge failed', { error: describe(err) });
+  }
+};
+
 export const main = async (): Promise<void> => {
   const staleMinutes = envInt('WORKER_STALE_MINUTES', WORKER_DEFAULTS.staleMinutes);
   const concurrency = envInt('WORKER_CONCURRENCY', WORKER_DEFAULTS.concurrency);
@@ -174,6 +188,10 @@ export const main = async (): Promise<void> => {
     tables: TASK_SOURCES.map((source) => source.jobType),
     reclaimed,
   });
+
+  // 进程启动第一轮立即清一次；其后每轮空转时按间隔触发（§5.3）。
+  await safePurge();
+  let lastPurgeAt = Date.now();
 
   writeHeartbeat();
   const heartbeat = setInterval(() => {
@@ -190,6 +208,11 @@ export const main = async (): Promise<void> => {
   let cursor = 0;
   let misses = 0;
   while (running) {
+    // 到点且当前串行主循环必然空闲 → 顺带清一轮（`modules/M08` §5.3）。
+    if (Date.now() - lastPurgeAt >= PURGE_INTERVAL_MS) {
+      await safePurge();
+      lastPurgeAt = Date.now();
+    }
     try {
       const source = TASK_SOURCES[cursor];
       cursor = (cursor + 1) % TASK_SOURCES.length;

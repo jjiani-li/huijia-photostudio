@@ -5,43 +5,44 @@
 
 ## 现在在哪
 
-- **契约单点化系列**（`.scratch/contract-freeze/`，spec 为 `spec.md`）：**01–11 已全部交付**（11 是该系列最后一张），Status 均为 `ready-for-human`，工作树干净、全部已提交。
-- **契约侧没有下一张了。** 想继续就转产品线：`/implement docs/prd/tickets`。
-- **产品侧**（`docs/prd/tickets/`）：只做了 T01（脚手架 + 四个横切层，提交 `606ed08`/`21e2915`）；**下一张是 T02 数据层**（迁移、schema、种子、11 个 repository、`migrate`/`seed`/`db:reset` 脚本）。
+- **产品线**（`docs/prd/tickets/`）：**T01–T13 已全部交付并两轴收口**，工作树干净（除下方「无关改动」），全部已提交：
+  - T01 脚手架 · T02 数据层 · T03 照片资产 · T04 预处理/评分 · T05 ArkProvider · T06 身份锚点 · T07 身份确认/授权 · T08 年代场景配置与 Prompt 拼装 · T09 生成编排 · T10 生图调用与结果转存 · T11 生成后复核与内容审核 · T12 账号/会话/额度 · T13 历史/再生成/彻底删除。
+- **下一张是 `T14`**：`docs/prd/tickets/T14-前端基础：设计基调、布局与通用组件.md`（依赖 `T01`、`T12`；`pages/P00-设计基准与路由.md`）。前端线 T14 → T15/T16 → T17。
+- **契约单点化系列**（`.scratch/contract-freeze/`）：01–11 已全部交付并置 `ready-for-human`，没有下一张。
 
 ## 工具现状（改动它们要同步 `docs/prd/spec/08-本地开发指南.md` §3.3 与脚本头部注释）
 
 - `docs/prd/spec/check-registry.json`：89 条检查项（B 67 / A 22）。
-- `scripts/check-docs.mjs`：17 条静态断言（新增 `page-min-sections` / `module-min-sections` / `error-list-coverage` / `error-copy-single-source`）；`--root` 指夹具树、`--write-index` 按工单表头重写 `tickets/README.md` 的检查项列。
+- `scripts/check-docs.mjs`：17 条静态断言；`--root` 指夹具树、`--write-index` 按工单表头重写 `tickets/README.md` 的检查项列。
 - `scripts/check-docs.test.mjs`：50 个夹具用例（新增断言必须配用例）。
-- 产品骨架：Next 15 + TS strict + vitest（17 个用例）+ eslint/tsconfig/`package.json`。
+- `scripts/acceptance.ts`：B 层执行器，现 **47 passed**（进程内直连 domain/端点，自带清理）。
+- 产品骨架：Next 15 + TS strict + vitest（**309 用例**）+ eslint/tsconfig/`package.json`。
 
-## 一条 ticket 的做法（01–11 都按这个走）
+## 一条 ticket 的做法（T01–T13 都按这个走）
 
-1. 读 `.scratch/contract-freeze/issues/NN-*.md` 的清单 + `spec.md` 里对应的裁定。
-2. 收敛文档（跨多个文件时可把「同一类、互不重叠的文件」分包给子代理并行做，然后统一验证）。
+1. 读 `docs/prd/tickets/TNN-*.md` 的「必读文档 + 要交付的文件 + 实现要点 + 完成判定」与该 ticket 的 `modules/MNN`。
+2. **收敛文档**（跨多个文件时可把「同一类、互不重叠的文件」分包给子代理并行做，然后统一验证）；工单 §3 的「新建/修改」栏若与现状（T02 已建的骨架文件）不符，一并改对。
 3. 清单要求断言的，就加/改闸门断言 + 夹具用例；改完文档树必须全绿。
-4. 跑齐：`corepack pnpm check:docs`、`corepack pnpm test:docs`、`corepack pnpm test`、`corepack pnpm check`。
-5. 提交（提交信息写清「按 issue 的清单做了什么、哪些条款已在前几轮收口只是核对、评审追加项」）。
-6. 用 `/code-review` 的两轴（Standards / Spec）子代理评审本次 diff，按意见收口后再提交一次。
-7. 把 issue 的复选框勾上、`Status` 改 `ready-for-human`，在 `## Comments` 里写交付记录与偏离说明。
-8. **停下汇报，等人工确认再进下一章**——一章一停：交付（提交 + 勾清单 + `ready-for-human`）后向用户汇报本章结果、偏离项与下一章是什么，**等用户回复「同意」再开下一张**，不自行续跑。
+4. 跑齐：`corepack pnpm check:docs`、`corepack pnpm test:docs`、`corepack pnpm test`、`corepack pnpm check`（外加该 ticket 完成判定里的 `corepack pnpm migrate && corepack pnpm seed && corepack pnpm check:acceptance`）。**改了 `docs/prd/**` 一定要重跑 `check:docs`。**
+5. 提交（提交信息写清「按 ticket 的清单做了什么、哪些是前几轮已收口只是核对、评审追加项」）。
+6. 用 `/code-review` 的两轴（Standards / Spec）子代理评审本次 diff（基线取上一个提交），按意见收口后再提交一次。
+7. 在 ticket 的 `## Comments` 写交付记录、偏离说明与未落地项；**停下汇报，等人工确认再进下一章**——一章一停。
 
-## 直接发给我的话
-
-产品线热会话（上下文还在）：
+## 冷启动指令（新会话直接发给我）
 
 ```
-/implement docs/prd/tickets ticket02
+在 D:\桌面\wt-20260915\day3 继续产品线。先读 .scratch/contract-freeze/NEXT.md 与
+docs/prd/tickets/T14-前端基础：设计基调、布局与通用组件.md，按 docs/prd/spec/09-施工纪律.md 的施工纪律
+与 T01–T13 的既有做法实现 T14：收敛文档、按清单加/改闸门断言与夹具用例，完整跑
+corepack pnpm check:docs / test:docs / test / check 与 check:acceptance，提交，再跑 /code-review
+两轴评审并收口。**一章一停**：交付后停下汇报，等我回复同意再进下一章。
 ```
 
-冷启动（新会话、上下文已清）：
+（若只想让我「接着干、模板化推进」，把上面的 `T14` 换成对应工单即可；T15 起同理。）
 
-```
-在 D:\桌面\wt-20260915\day3 转做产品线。先读 .scratch/contract-freeze/NEXT.md 与
-docs/prd/tickets/T02-数据层：迁移、schema 与种子数据.md，按 docs/prd/ 的施工纪律（spec/09）
-与 T01 的做法实现 T02：跑 pnpm 的 test/check 等、提交、再跑 /code-review 两轴评审并收口。
-**一章一停**：交付后停下汇报，等我回复同意再进下一章。
-```
+## 已知遗留 / 注意事项（不必现在处理）
 
-（契约单点化系列 01–11 已全部交付并置 `ready-for-human`，没有下一张。）
+- `docs/提示词.md` 在工作树里显示为已修改：这是**先前的无关改动**（提示词原始素材），历次交付都没动它、也没提交，忽略即可。
+- `ERR-01` / `ERR-05` 已随 T10 补齐；`E2E-03` 随 T09 补齐。
+- `DEL-01`–`DEL-04` / `CMP-05` 随 T13 补齐；`/api/history` 的 `url` 带 `?w=400`、`deletePhoto` 对「已物理清理的行」按 `spec/03` §1.5 返 `200`（幂等）是 `modules/M08` §9 已收口的口径。
+- 若干刻意延后项见各 ticket 的 `## Comments`（如 `DB-07` 已在 T09 接线；T06 锚点提取不自动重试是 `modules/M03` 的设计）。

@@ -416,3 +416,32 @@ export const generationSchema = z.object({
   finishedAt: z.string().nullable(),
   results: z.array(generationResultSchema),
 });
+
+// ── 历史链路 DTO（`docs/prd/spec/03-接口契约.md` §3.6、§4；`tickets/T13`）──────────────────
+
+/**
+ * `GET /api/history` 的一条（`spec/03` §3.6）：`anchorText` 不可空（只返 `status='succeeded'` 的锚点）；
+ * `sourcePhoto` = 第一个未软删的输入图，`preprocessedPhoto` 可能为 `null`，`generations` 最多 10 条。
+ */
+export interface HistoryItem {
+  anchorId: number;
+  anchorText: string;
+  confirmedAt: Iso | null;
+  sourcePhoto: Photo;
+  preprocessedPhoto: Photo | null;
+  generations: Generation[];
+}
+
+export const historyItemSchema = z.object({
+  anchorId: z.number().int(),
+  anchorText: z.string(),
+  confirmedAt: z.string().nullable(),
+  sourcePhoto: photoSchema,
+  preprocessedPhoto: photoSchema.nullable(),
+  generations: z.array(generationSchema),
+});
+
+export const historyListSchema = z.object({
+  items: z.array(historyItemSchema),
+  nextCursor: z.string().nullable(),
+});
