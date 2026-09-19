@@ -14,6 +14,8 @@ import {
   applyReverseSuggestion,
   confirmPath,
   EMPTY_CONFIG_COPY,
+  hasUnauthenticated,
+  loginPath,
   matchSelection,
   readSelection,
   shouldRedirectToConfirm,
@@ -63,6 +65,16 @@ export function ChoosePanel({ anchorId }: ChoosePanelProps): ReactNode {
     if (anchor !== null && shouldRedirectToConfirm(anchor)) router.replace(confirmPath(anchorId));
   }, [anchor, anchorId, router]);
 
+  // 会话失效（cookie 被清掉而布局的软守卫没拦住）：按 §8 跳登录并保留 `next`，不留一个打不开的页面。
+  const sessionExpired = hasUnauthenticated([
+    configState.error?.code,
+    meState.error?.code,
+    anchorState.error?.code,
+  ]);
+  useEffect(() => {
+    if (sessionExpired) router.replace(loginPath(pathname));
+  }, [sessionExpired, pathname, router]);
+
   // 接住反推推荐（§7）：URL 未带 `era` / `scene` 时把内存态初值写进 URL；URL 已带参数则不参与。
   useEffect(() => {
     const href = applyReverseSuggestion(pathname, searchParams, takeReverseSuggestion);
@@ -98,11 +110,10 @@ export function ChoosePanel({ anchorId }: ChoosePanelProps): ReactNode {
     }
   };
 
-  if (anchorState.error !== null) {
-    return <ErrorNotice error={anchorState.error} variant="page" />;
-  }
-  if (configState.error !== null) {
-    return <ErrorNotice error={configState.error} variant="page" onRetry={configState.reload} />;
+  if (anchorState.error !== null || configState.error !== null) {
+    // 401 已在上面 `replace` 到登录页；这里只剩网络 / 其他错误码（§8：不白屏）。
+    const error = anchorState.error ?? configState.error;
+    return <ErrorNotice error={error} variant="page" onRetry={configState.reload} />;
   }
   if (config === null || configState.loading) {
     return <ChooseSkeleton />;
@@ -114,6 +125,7 @@ export function ChoosePanel({ anchorId }: ChoosePanelProps): ReactNode {
   return (
     <ChooseView
       config={config}
+      anchorId={anchorId}
       selection={selection}
       remaining={remaining}
       busy={busy}

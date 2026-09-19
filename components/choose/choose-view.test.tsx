@@ -1,8 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import type { ReactNode } from 'react';
 import type { EraSceneConfig } from '../../src/shared/types';
 import { ChooseView } from './choose-view';
 import type { Selection } from './selection';
+
+/** `next/link` 在 node 环境（非 App Router 运行时）不挂载 router，测试里换成普通 `<a>`。 */
+vi.mock('next/link', () => ({
+  default: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a>,
+}));
 
 /**
  * `/choose/[anchorId]` 的展示层（`docs/prd/pages/P02-年代与场景选择.md` §4、§5、§7、§8 与
@@ -37,6 +43,7 @@ const render = (over: Partial<Parameters<typeof ChooseView>[0]> = {}): string =>
   renderToStaticMarkup(
     <ChooseView
       config={CONFIG}
+      anchorId={7}
       selection={SELECTED}
       remaining={20}
       busy={false}
@@ -167,5 +174,23 @@ describe('错误呈现（§8）', () => {
     const html = render({ submitError: { code: 'QUOTA_EXCEEDED', message: '今天的生成额度用完了，明天再来吧' } });
     expect(html).toContain('今天的生成额度用完了，明天再来吧');
     expect(html).toContain('role="alert"');
+  });
+
+  it('`ANCHOR_NOT_CONFIRMED` → 附加「去确认」回 `/confirm/:id`（P00 §8、§5.2）', () => {
+    const html = render({ submitError: { code: 'ANCHOR_NOT_CONFIRMED', message: '需要先确认"这就是他"' } });
+    expect(html).toContain('去确认');
+    expect(html).toContain('href="/confirm/7"');
+  });
+
+  it('`REALNAME_REQUIRED` → 附加「去实名」→ `/login`', () => {
+    const html = render({ submitError: { code: 'REALNAME_REQUIRED', message: '需要先完成实名认证' } });
+    expect(html).toContain('去实名');
+    expect(html).toContain('href="/login"');
+  });
+
+  it('其余错误码不给附加动作（形态与动作归 `ErrorNotice`）', () => {
+    const html = render({ submitError: { code: 'GENERATION_IN_PROGRESS', message: '上一组还在生成，稍等一下' } });
+    expect(html).not.toContain('去确认');
+    expect(html).not.toContain('去实名');
   });
 });

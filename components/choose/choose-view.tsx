@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import Link from 'next/link';
 import type { ApiNotice } from '../../src/shared/api-client';
 import type { EraSceneConfig, EraSceneProfile } from '../../src/shared/types';
 import { ErrorNotice } from '../error-notice';
@@ -8,6 +9,7 @@ import { EraCard } from './era-card';
 import { GenerateCta } from './generate-cta';
 import { SceneCard } from './scene-card';
 import {
+  confirmPath,
   disabledReason,
   generateGate,
   quotaHint,
@@ -22,6 +24,7 @@ import {
  */
 export interface ChooseViewProps {
   config: EraSceneConfig;
+  anchorId: number;
   /** 已与配置表对过的选择（URL 里有但配置里没有的值在这里是 `null`）。 */
   selection: Selection;
   /** `GET /api/me` 的 `quota.remaining`；未取到为 `null`。 */
@@ -35,16 +38,37 @@ export interface ChooseViewProps {
 }
 
 /** `(eraCode, sceneId)` 命中的组合档案；未命中返回 `null`（整个组合区不渲染）。 */
-export const findProfile = (
-  config: EraSceneConfig,
-  selection: Selection,
-): EraSceneProfile | null =>
+const findProfile = (config: EraSceneConfig, selection: Selection): EraSceneProfile | null =>
   config.profiles.find(
     (profile) => profile.eraCode === selection.eraCode && profile.sceneId === selection.sceneId,
   ) ?? null;
 
+/**
+ * 提交失败时的附加动作（`pages/P00` §8 的形态表、§5.2）：
+ * `ANCHOR_NOT_CONFIRMED` → 「去确认」回确认页；`REALNAME_REQUIRED` → 「去实名」去登录页。
+ * 其余错误码不给动作（`ErrorNotice` 自己按 code 兜「去登录」/「回历史」/「重试」）。
+ */
+const submitAction = (error: ApiNotice | null, anchorId: number): ReactNode => {
+  if (error?.code === 'ANCHOR_NOT_CONFIRMED') {
+    return (
+      <Link href={confirmPath(anchorId)} className="text-note text-primary underline">
+        去确认
+      </Link>
+    );
+  }
+  if (error?.code === 'REALNAME_REQUIRED') {
+    return (
+      <Link href="/login" className="text-note text-primary underline">
+        去实名
+      </Link>
+    );
+  }
+  return null;
+};
+
 export function ChooseView({
   config,
+  anchorId,
   selection,
   remaining,
   busy,
@@ -58,6 +82,7 @@ export function ChooseView({
   const scene = config.scenes.find((item) => item.id === selection.sceneId) ?? null;
   const profile = findProfile(config, selection);
 
+  // 按钮的 `disabled`、置灰文案与提交动作同源（都走 `generateGate`，见 `selection.ts`）。
   const gate = generateGate({ ...selection, remaining, busy });
   return (
     <section className="flex flex-col gap-2xl animate-fade-in">
@@ -93,7 +118,7 @@ export function ChooseView({
 
       <CountPicker value={selection.count} onChange={onChangeCount} />
 
-      <ErrorNotice error={submitError} variant="inline" />
+      <ErrorNotice error={submitError} variant="inline" action={submitAction(submitError, anchorId)} />
 
       <GenerateCta
         disabled={gate !== null}

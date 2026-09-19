@@ -17,23 +17,19 @@ export interface ReverseSuggestion {
 
 let pending: ReverseSuggestion | null = null;
 
-/** 上传页采纳时写入（覆盖上一次）；`tickets/T15` 调用。 */
+/** 上传页采纳时写入（覆盖上一次）：`tickets/T15` 调用。 */
 export const adoptReverseSuggestion = (suggestion: ReverseSuggestion): void => {
   pending = { ...suggestion };
 };
 
-/** 只读一次（不消费）；返回副本，调用方改不动内部状态。 */
-export const peekReverseSuggestion = (): ReverseSuggestion | null =>
-  pending === null ? null : { ...pending };
-
-/** 取用并清空（`pages/P02-年代与场景选择.md` §7：返回后内存态不再参与）。 */
+/** 取用并清空（`pages/P02-年代与场景选择.md` §7：返回后内存态不再参与）；返回副本，调用方改不动内部状态。 */
 export const takeReverseSuggestion = (): ReverseSuggestion | null => {
   const taken = pending;
   pending = null;
   return taken === null ? null : { ...taken };
 };
 
-/** 测试用：复位模块级状态。 */
+/** 测试用：复位模块级状态（同 `resetArk` / `resetEraSceneConfigCache` 的约定）。 */
 export const resetReverseSuggestion = (): void => {
   pending = null;
 };

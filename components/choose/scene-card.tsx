@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { SceneOption } from '../../src/shared/types';
+import { OptionCard } from './option-card';
 import { SampleSlot } from './sample-slot';
 
 /**
@@ -14,18 +15,9 @@ export interface SceneCardProps {
 
 export function SceneCard({ scene, selected, onSelect }: SceneCardProps): ReactNode {
   return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      onClick={() => onSelect(scene.id)}
-      className={
-        selected
-          ? 'flex flex-col gap-md rounded-md border border-primary bg-primary-soft p-lg text-left animate-fade-in'
-          : 'flex flex-col gap-md rounded-md border border-border bg-surface p-lg text-left'
-      }
-    >
+    <OptionCard selected={selected} onSelect={() => onSelect(scene.id)}>
       <SampleSlot src={scene.coverUrl} caption={scene.caption} alt={scene.name} />
       <span className="font-serif text-heading text-ink">{scene.name}</span>
-    </button>
+    </OptionCard>
   );
 }

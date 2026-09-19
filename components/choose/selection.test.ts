@@ -7,7 +7,9 @@ import {
   disabledReason,
   GATE_COPY,
   generateGate,
+  hasUnauthenticated,
   isLowConfidence,
+  loginPath,
   matchSelection,
   quotaHint,
   readSelection,
@@ -166,6 +168,20 @@ describe('shouldRedirectToConfirm（§2、SEC-01 的前端半段）', () => {
     expect(shouldRedirectToConfirm({ confirmedByUser: false })).toBe(true);
     expect(shouldRedirectToConfirm({ confirmedByUser: true })).toBe(false);
     expect(confirmPath(12)).toBe('/confirm/12');
+  });
+});
+
+describe('loginPath / hasUnauthenticated（§8：401 统一跳登录并保留 next）', () => {
+  it('带上当前路径作为 `next`（编码过）', () => {
+    expect(loginPath('/choose/7')).toBe('/login?next=%2Fchoose%2F7');
+  });
+
+  it('任一取数回 UNAUTHENTICATED 即为会话失效；其余错误码不算', () => {
+    expect(hasUnauthenticated(['UNAUTHENTICATED', undefined])).toBe(true);
+    expect(hasUnauthenticated([undefined, 'UNAUTHENTICATED', undefined])).toBe(true);
+    for (const codes of [[], [undefined], ['INTERNAL'], ['PROVIDER_ERROR', undefined]]) {
+      expect(hasUnauthenticated(codes), JSON.stringify(codes)).toBe(false);
+    }
   });
 });
 
