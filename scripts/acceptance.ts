@@ -12,10 +12,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { NextRequest } from 'next/server';
+import type { ZodTypeAny } from 'zod';
 import sharp from 'sharp';
 import { getDb } from '../src/server/db/connection';
 import { hardDeleteAnchor, insert as insertAnchor } from '../src/server/db/repositories/anchors';
-import { readEraSceneConfig } from '../src/server/db/repositories/config';
+import { getEra, getProfile, getScene, readEraSceneConfig } from '../src/server/db/repositories/config';
 import { findById as findGenerationById } from '../src/server/db/repositories/generations';
 import { insertPhoto } from '../src/server/db/repositories/photos';
 import { insertUser } from '../src/server/db/repositories/users';
@@ -30,7 +31,22 @@ import { confirmAnchor, revokeConsents } from '../src/server/domain/anchorServic
 import { deletePhoto } from '../src/server/domain/deletionService';
 import { historyListSchema } from '../src/shared/types';
 import {
+  anchorSchema,
+  eraSceneConfigSchema,
+  generationResultSchema,
+  generationSchema,
+  healthSchema,
+  photoListSchema,
+  photoSchema,
+  qualitySchema,
+  quotaSchema,
+  realNameStatusSchema,
+  userSchema,
+} from '../src/shared/types';
+import { ERROR_MESSAGE } from '../src/shared/error-message';
+import {
   assertAnchorGeneratable,
+  buildGenerationDraft,
   createGeneration,
   MIN_SIZE_PIXELS,
   retryGeneration,
@@ -66,14 +82,19 @@ import { GET as getHistory } from '../app/api/history/route';
 import { DELETE as deletePhotoRoute } from '../app/api/photos/[id]/route';
 import { GET as getPhotoFile } from '../app/api/photos/[id]/file/route';
 import { POST as postAuthCode } from '../app/api/auth/code/route';
-import { POST as postPhoto } from '../app/api/photos/route';
+import { POST as postLogin } from '../app/api/auth/login/route';
+import { POST as postLogout } from '../app/api/auth/logout/route';
+import { GET as getPhotos, POST as postPhoto } from '../app/api/photos/route';
 import { GET as getRealName, POST as postRealName } from '../app/api/me/realname/route';
 import { POST as postPreprocess } from '../app/api/photos/[id]/preprocess/route';
 import { POST as postAnchor } from '../app/api/anchors/route';
-import { GET as getAnchor } from '../app/api/anchors/[id]/route';
+import { DELETE as deleteAnchorRoute, GET as getAnchor } from '../app/api/anchors/[id]/route';
+import { POST as postAnchorRetry } from '../app/api/anchors/[id]/retry/route';
 import { POST as postConfirm } from '../app/api/anchors/[id]/confirm/route';
 import { POST as postGeneration } from '../app/api/generations/route';
 import { GET as getGeneration } from '../app/api/generations/[id]/route';
+import { POST as postGenerationRetry } from '../app/api/generations/[id]/retry/route';
+import { POST as postFeedback } from '../app/api/results/[id]/feedback/route';
 
 interface CheckResult {
   ok: boolean;
@@ -2165,48 +2186,69 @@ const purgePhotos = (ids: number[]): void => {
   }
 };
 
-checks.push({
-  id: 'E2E-01',
-  run: async () => {
-    // 生成链路的额度预扣会撞满 DEV_USER 的默认上限（T09/T10 的用例不回收），先抬高上限并快照回滚。
-    raiseQuotaForGenerationChecks();
-    snapshotUsage();
+/**
+ * `E2E-01` / `E2E-10` 共用的链路驱动（`spec/07-验收标准.md` §2.4）：真实样例 → 上传 → 预处理 → 建锚点
+ * → 提取 → 确认 → 生成 → 复核 → 历史 → 下载，**全程只走端点与 handler，不手工改库**。
+ * 返回步骤串 / 问题串与本次新建的行 id（供 `E2E-10` 的残留断言），清理登记进 `cleanups`（§3，幂等）。
+ */
+interface SampleChain {
+  anchorId: number | null;
+  generationId: number | null;
+  anchorText: string;
+  steps: string[];
+  problems: string[];
+  newAnchorIds: number[];
+  newGenerationIds: number[];
+}
 
-    const photosBefore = new Set(
-      (getDb().prepare('SELECT id FROM photos').all() as { id: number }[]).map((row) => row.id),
-    );
-    const generationsBefore = new Set(
-      (getDb().prepare('SELECT id FROM generations').all() as { id: number }[]).map((row) => row.id),
-    );
-    let anchorId: number | null = null;
+const driveSampleChain = async (): Promise<SampleChain> => {
+  // 生成链路的额度预扣会撞满 DEV_USER 的默认上限（T09/T10 的用例不回收），先抬高上限并快照回滚。
+  raiseQuotaForGenerationChecks();
+  snapshotUsage();
 
-    const cleanup = (): void => {
-      for (const id of (getDb().prepare('SELECT id FROM generations').all() as { id: number }[])
-        .map((row) => row.id)
-        .filter((id) => !generationsBefore.has(id))) {
-        purgeGeneration(id);
-      }
-      if (anchorId !== null) {
-        getDb().prepare('DELETE FROM consents WHERE anchor_id = ?').run(anchorId);
-        getDb().prepare('DELETE FROM audit_logs WHERE target = ?').run(`anchor:${anchorId}`);
-        hardDeleteAnchor(anchorId, DEV_USER);
-      }
-      purgePhotos(
-        (getDb().prepare('SELECT id FROM photos').all() as { id: number }[])
-          .map((row) => row.id)
-          .filter((id) => !photosBefore.has(id)),
-      );
-    };
-    cleanups.push(cleanup);
+  const newIds = (table: string, before: Set<number>): number[] =>
+    (getDb().prepare(`SELECT id FROM ${table}`).all() as { id: number }[])
+      .map((row) => row.id)
+      .filter((id) => !before.has(id));
 
-    const problems: string[] = [];
-    const steps: string[] = [];
-    const done = (): CheckResult => ({
-      ok: problems.length === 0,
-      expected:
-        '登入 → 上传样例 201 → preprocess → 建锚点 → 提取 succeeded → confirm → 生成 E4×S3 count=2 → succeeded(2 张) → 历史可见 → 下载图可解析宽高',
-      actual: problems.length === 0 ? `全链路无错误；${steps.join(' → ')}` : `${problems.join('；')}；${steps.join(' → ')}`,
-    });
+  const photosBefore = new Set(
+    (getDb().prepare('SELECT id FROM photos').all() as { id: number }[]).map((row) => row.id),
+  );
+  const generationsBefore = new Set(
+    (getDb().prepare('SELECT id FROM generations').all() as { id: number }[]).map((row) => row.id),
+  );
+  const anchorsBefore = new Set(
+    (getDb().prepare('SELECT id FROM identity_anchors').all() as { id: number }[]).map((row) => row.id),
+  );
+
+  let cleaned = false;
+  const cleanup = (): void => {
+    if (cleaned) return;
+    cleaned = true;
+    for (const id of newIds('generations', generationsBefore)) purgeGeneration(id);
+    for (const id of newIds('identity_anchors', anchorsBefore)) {
+      getDb().prepare('DELETE FROM consents WHERE anchor_id = ?').run(id);
+      getDb().prepare('DELETE FROM audit_logs WHERE target = ?').run(`anchor:${id}`);
+      hardDeleteAnchor(id, DEV_USER);
+    }
+    purgePhotos(newIds('photos', photosBefore));
+  };
+  cleanups.push(cleanup);
+
+  const problems: string[] = [];
+  const steps: string[] = [];
+  let anchorId: number | null = null;
+  let generationId: number | null = null;
+  let anchorText = '';
+  const outcome = (): SampleChain => ({
+    anchorId,
+    generationId,
+    anchorText,
+    steps,
+    problems,
+    newAnchorIds: newIds('identity_anchors', anchorsBefore),
+    newGenerationIds: newIds('generations', generationsBefore),
+  });
 
     try {
       // ① 登入：DEV_USER 的会话（种子已实名，`migrations/001-init.sql`），受保护端点都带 `sid` cookie。
@@ -2214,7 +2256,7 @@ checks.push({
       steps.push(`登入=${me.status}`);
       if (me.status !== 200) {
         problems.push(`登入返回 ${me.status}`);
-        return done();
+        return outcome();
       }
 
       // ② 上传真实样例（`multipart/form-data`，字段 `file`）。
@@ -2229,7 +2271,7 @@ checks.push({
       steps.push(`上传=${uploadRes.status}`);
       if (uploadRes.status !== 201 || originalId === undefined) {
         problems.push(`上传失败 ${uploadRes.status}`);
-        return done();
+        return outcome();
       }
 
       // ③ 预处理（幂等；`usable=false` 也 200，但锚点提取会判低质量 → 这里必须可用）。
@@ -2241,7 +2283,7 @@ checks.push({
       steps.push(`preprocess=${preRes.status}/usable=${String(preBody.quality?.usable)}`);
       if (preRes.status !== 200 || preBody.photo?.id === undefined || preBody.quality?.usable !== true) {
         problems.push('预处理未产出可用图');
-        return done();
+        return outcome();
       }
 
       // ④ 建锚点（`spec/03-接口契约.md` §3.3：`POST /api/anchors` 收 `photoIds`）。
@@ -2258,7 +2300,7 @@ checks.push({
       steps.push(`建锚点=${anchorRes.status}/${createdAnchor?.status ?? '-'}`);
       if (anchorRes.status !== 202 || anchorId === null) {
         problems.push(`建锚点失败 ${anchorRes.status}`);
-        return done();
+        return outcome();
       }
 
       // ⑤ 轮询至 `succeeded`：进程内没有真实 worker（`spec/03` §2.1），直接跑该行的 handler 再读端点。
@@ -2277,8 +2319,9 @@ checks.push({
       steps.push(`锚点=${anchorDto.status}`);
       if (anchorDto.status !== 'succeeded' || anchorDto.anchorText === null || anchorDto.anchorText === '') {
         problems.push(`锚点未到 succeeded（${anchorDto.status}）`);
-        return done();
+        return outcome();
       }
+      anchorText = anchorDto.anchorText;
 
       // ⑥ 确认（两项授权缺一不可，`modules/M04` §5.1）。
       const confirmRes = await postConfirm(
@@ -2292,7 +2335,7 @@ checks.push({
       steps.push(`confirm=${confirmRes.status}`);
       if (confirmRes.status !== 200) {
         problems.push(`确认失败 ${confirmRes.status}`);
-        return done();
+        return outcome();
       }
 
       // ⑦ 生成 E4×S3 count=2。
@@ -2306,11 +2349,11 @@ checks.push({
       );
       const createdGeneration = ((await genRes.json()) as { generation?: { id?: number; status?: string } })
         .generation;
-      const generationId = createdGeneration?.id;
+      generationId = createdGeneration?.id ?? null;
       steps.push(`生成=${genRes.status}/${createdGeneration?.status ?? '-'}`);
-      if (genRes.status !== 202 || generationId === undefined) {
+      if (genRes.status !== 202 || generationId === null) {
         problems.push(`建生成任务失败 ${genRes.status}`);
-        return done();
+        return outcome();
       }
 
       // ⑧ 轮询至 `succeeded`：同上，直接跑生成 handler 再读端点。
@@ -2349,7 +2392,7 @@ checks.push({
       const resultPhotoId = resultRows(generationId)[0]?.photo_id;
       if (resultPhotoId === undefined) {
         problems.push('没有结果图可下载');
-        return done();
+        return outcome();
       }
       const fileRes = await getPhotoFile(
         authedRequest(`http://localhost/api/photos/${resultPhotoId}/file`),
@@ -2361,12 +2404,688 @@ checks.push({
         problems.push(`下载图不可读（${fileRes.status}/${String(meta.width)}x${String(meta.height)}）`);
       }
 
-      return done();
+      return outcome();
     } finally {
-      cleanup();
+      /* 统一清理由 `cleanups` 在 `main()` 结束时执行（helper 已登记，幂等） */
     }
+  };
+
+checks.push({
+  id: 'E2E-01',
+  run: async () => {
+    const chain = await driveSampleChain();
+    return {
+      ok: chain.problems.length === 0,
+      expected:
+        '登入 → 上传样例 201 → preprocess → 建锚点 → 提取 succeeded → confirm → 生成 E4×S3 count=2 → succeeded(2 张) → 历史可见 → 下载图可解析宽高',
+      actual:
+        chain.problems.length === 0
+          ? `全链路无错误；${chain.steps.join(' → ')}`
+          : `${chain.problems.join('；')}；${chain.steps.join(' → ')}`,
+    };
   },
 });
+
+// ── `tickets/T20` 最终验收收口：B 层最后 9 项（`docs/prd/spec/07-验收标准.md` §2）──
+// `API-01` / `CMP-02` 是静态扫描；其余进程内直调端点 / handler，清理统一登记进 `cleanups`（§3）。
+
+/** `spec/03-接口契约.md` §3 的端点清单：静态解析文档，`API-01` 据此校验路由文件与方法导出。 */
+const specEndpoints = (): { method: string; apiPath: string }[] => {
+  const text = fs.readFileSync('docs/prd/spec/03-接口契约.md', 'utf8');
+  const section = text.slice(text.indexOf('## 3. 端点详表'), text.indexOf('## 4. TypeScript 形状'));
+  const found = new Map<string, { method: string; apiPath: string }>();
+  const re = /\*\*`(GET|POST|DELETE|PATCH|PUT) (\/api\/[^`?\s]+)`\*\*/g;
+  for (const m of section.matchAll(re)) {
+    const method = m[1];
+    const apiPath = m[2];
+    if (method !== undefined && apiPath !== undefined) found.set(`${method} ${apiPath}`, { method, apiPath });
+  }
+  return [...found.values()].sort((a, b) =>
+    `${a.method} ${a.apiPath}`.localeCompare(`${b.method} ${b.apiPath}`),
+  );
+};
+
+/** 走 `POST /api/photos` 上传一张内存 jpeg 夹具，返回响应体里的 `photo`（行与磁盘文件由 `cleanups` 回收）。 */
+const uploadFixturePhoto = async (): Promise<Record<string, unknown>> => {
+  const buffer = await sharp({
+    create: { width: 48, height: 48, channels: 3, background: { r: 205, g: 185, b: 160 } },
+  })
+    .jpeg()
+    .toBuffer();
+  const form = new FormData();
+  form.set('file', new File([new Uint8Array(buffer)], 'acceptance-shape.jpg', { type: 'image/jpeg' }));
+  const res = await postPhoto(authedRequest('http://localhost/api/photos', { method: 'POST', body: form }), {
+    params: Promise.resolve({}),
+  });
+  if (res.status !== 201) throw new Error(`上传夹具失败：${res.status}`);
+  return ((await res.json()) as { photo: Record<string, unknown> }).photo;
+};
+
+/** 已实名用户（跨用户 404 用例要过第 1 步实名门槛）；行清理由 `makeUnverifiedUser` 登记。 */
+const makeVerifiedUser = (): number => {
+  const id = makeUnverifiedUser();
+  getDb()
+    .prepare('UPDATE users SET verified_at = ?, real_name = ?, id_hash = ? WHERE id = ?')
+    .run(nowIso(), '验收用户', `acceptance-hash-${id}`, id);
+  return id;
+};
+
+/** `API-02` 的 `POST /api/me/realname` 样本（GB 11643 校验位合法，且不与 `RN-01`–`RN-04` 的样本撞唯一性）。 */
+const API02_REALNAME_ID = '530102198203150112';
+
+checks.push(
+  {
+    // `API-01`（`spec/03-接口契约.md` §3）：§3 列出的每个端点都要有 `app/api/**/route.ts`，且导出对应方法。
+    id: 'API-01',
+    run: () => {
+      const endpoints = specEndpoints();
+      const missing: string[] = [];
+      for (const { method, apiPath } of endpoints) {
+        const file = `app${apiPath.replace(/:([A-Za-z]+)/g, '[$1]')}/route.ts`;
+        if (!fs.existsSync(file)) {
+          missing.push(`${method} ${apiPath}（缺 ${file}）`);
+          continue;
+        }
+        if (!new RegExp(`export const ${method}\\b`).test(fs.readFileSync(file, 'utf8'))) {
+          missing.push(`${method} ${apiPath}（${file} 未导出 ${method}）`);
+        }
+      }
+      return {
+        ok: missing.length === 0,
+        expected: `${endpoints.length} 个端点全部存在且导出对应方法`,
+        actual:
+          missing.length === 0 ? `${endpoints.length}/${endpoints.length}` : `${missing.length} 缺失：${missing.join('；')}`,
+      };
+    },
+  },
+  {
+    // `API-02`（`spec/03-接口契约.md` §4、`spec/07-验收标准.md` §2.3）：逐端点直调一次，用 `src/shared/types.ts`
+    // 的 zod schema 解析成功响应——该文件是这些形状的唯一来源；无共享 schema 的端点（`{ ok: true }`、
+    // `POST /api/auth/code` 的 `{ sent, expiresInSec, devCode? }`、二进制读图）按文档顶层键集 / 响应头断言。
+    id: 'API-02',
+    dependsOn: ['API-01'],
+    run: async () => {
+      const failures: string[] = [];
+      let checked = 0;
+      const parseWith = (label: string, schema: ZodTypeAny, value: unknown): void => {
+        checked += 1;
+        const result = schema.safeParse(value);
+        if (!result.success) {
+          const issue = result.error.issues[0];
+          failures.push(`${label}：${(issue?.path ?? []).join('.')} ${issue?.message ?? 'schema 不符'}`);
+        }
+      };
+      const expectKeys = (label: string, body: Record<string, unknown>, keys: string[]): void => {
+        checked += 1;
+        const actual = Object.keys(body).sort();
+        const want = [...keys].sort();
+        if (actual.join(',') !== want.join(',')) failures.push(`${label}：键=${actual.join(',')}，期望=${want.join(',')}`);
+      };
+      const expectStatus = (label: string, res: Response, status: number): void => {
+        checked += 1;
+        if (res.status !== status) failures.push(`${label}：HTTP ${res.status}，期望 ${status}`);
+      };
+      const finish = (): CheckResult => ({
+        ok: failures.length === 0,
+        expected: '全部端点的成功响应都能通过 src/shared/types.ts 的共享 schema（或文档顶层键集）校验',
+        actual: failures.length === 0 ? `${checked} 项通过` : `${failures.length}/${checked} 项不符：${failures.join('；')}`,
+      });
+
+      // 自带清理：端点直调会写 `photos` / `identity_anchors` 行，按本次运行内的 id 列表回收。
+      const photosBefore = new Set(
+        (getDb().prepare('SELECT id FROM photos').all() as { id: number }[]).map((row) => row.id),
+      );
+      const anchorsBefore = new Set(
+        (getDb().prepare('SELECT id FROM identity_anchors').all() as { id: number }[]).map((row) => row.id),
+      );
+      cleanups.push(() => {
+        for (const id of (getDb().prepare('SELECT id FROM identity_anchors').all() as { id: number }[])
+          .map((row) => row.id)
+          .filter((id) => !anchorsBefore.has(id))) {
+          getDb().prepare('DELETE FROM consents WHERE anchor_id = ?').run(id);
+          getDb().prepare('DELETE FROM audit_logs WHERE target = ?').run(`anchor:${id}`);
+          hardDeleteAnchor(id, DEV_USER);
+        }
+        purgePhotos(
+          (getDb().prepare('SELECT id FROM photos').all() as { id: number }[])
+            .map((row) => row.id)
+            .filter((id) => !photosBefore.has(id)),
+        );
+      });
+
+      // ① GET /api/health（免登录）
+      const healthRes = await getHealth(healthRequest, { params: Promise.resolve({}) });
+      expectStatus('GET /api/health', healthRes, 200);
+      parseWith('GET /api/health', healthSchema, await healthRes.json());
+
+      // ② POST /api/auth/code → ③ POST /api/auth/login（同 identifier；首次登录自动建用户，行按 identifier / id 回收）
+      const identifier = `137${String(Date.now()).slice(-8)}`;
+      const codeRes = await postAuthCode(jsonRequest('http://localhost/api/auth/code', { identifier }), {
+        params: Promise.resolve({}),
+      });
+      const codeBody = (await codeRes.json()) as Record<string, unknown>;
+      expectStatus('POST /api/auth/code', codeRes, 200);
+      expectKeys('POST /api/auth/code', codeBody, ['sent', 'expiresInSec', 'devCode']);
+      const loginRes = await postLogin(
+        jsonRequest('http://localhost/api/auth/login', { identifier, code: codeBody.devCode ?? '' }),
+        { params: Promise.resolve({}) },
+      );
+      const loginBody = (await loginRes.json()) as { user?: Record<string, unknown> };
+      expectStatus('POST /api/auth/login', loginRes, 200);
+      parseWith('POST /api/auth/login.user', userSchema, loginBody.user);
+      const loginUserId = loginBody.user?.id;
+      cleanups.push(() => {
+        getDb().prepare('DELETE FROM login_codes WHERE identifier = ?').run(identifier);
+        if (typeof loginUserId === 'number') {
+          getDb().prepare('DELETE FROM audit_logs WHERE user_id = ?').run(loginUserId);
+          getDb().prepare('DELETE FROM sessions WHERE user_id = ?').run(loginUserId);
+          getDb().prepare('DELETE FROM users WHERE id = ?').run(loginUserId);
+        }
+      });
+
+      // ④ POST /api/auth/logout（用一次性用户的会话，不动 `DEV_USER` 的会话）
+      const logoutUser = makeUnverifiedUser();
+      const logoutRes = await postLogout(
+        requestWithUser(logoutUser, 'http://localhost/api/auth/logout', { method: 'POST' }),
+        { params: Promise.resolve({}) },
+      );
+      expectStatus('POST /api/auth/logout', logoutRes, 200);
+      expectKeys('POST /api/auth/logout', (await logoutRes.json()) as Record<string, unknown>, ['ok']);
+
+      // ⑤ GET /api/me
+      const meRes = await getMe(authedRequest('http://localhost/api/me'), { params: Promise.resolve({}) });
+      const meBody = (await meRes.json()) as { user?: unknown; quota?: unknown };
+      expectStatus('GET /api/me', meRes, 200);
+      parseWith('GET /api/me.user', userSchema, meBody.user);
+      parseWith('GET /api/me.quota', quotaSchema, meBody.quota);
+
+      // ⑥ GET /api/me/realname → ⑦ POST /api/me/realname（未实名的一次性用户）
+      const realnameUser = makeUnverifiedUser();
+      const realnameGetRes = await realnameGet(realnameUser);
+      const realnameGetBody = (await realnameGetRes.json()) as { realNameStatus?: unknown };
+      expectStatus('GET /api/me/realname', realnameGetRes, 200);
+      parseWith('GET /api/me/realname', realNameStatusSchema, realnameGetBody.realNameStatus);
+      const realnamePostRes = await realnamePost(realnameUser, { realName: '王五', idNumber: API02_REALNAME_ID });
+      const realnamePostBody = (await realnamePostRes.json()) as { realNameStatus?: unknown };
+      expectStatus('POST /api/me/realname', realnamePostRes, 200);
+      parseWith('POST /api/me/realname', realNameStatusSchema, realnamePostBody.realNameStatus);
+
+      // ⑧ GET /api/config/era-scene
+      parseWith('GET /api/config/era-scene', eraSceneConfigSchema, await readConfigResponse());
+
+      // ⑨ POST /api/photos → ⑩ POST /api/photos/:id/preprocess → ⑪ GET /api/photos/:id/file
+      const uploaded = await uploadFixturePhoto();
+      parseWith('POST /api/photos', photoSchema, uploaded);
+      const originalId = typeof uploaded.id === 'number' ? uploaded.id : null;
+      if (originalId === null) {
+        failures.push('POST /api/photos：响应缺 id，后续依赖照片的端点未校验');
+        return finish();
+      }
+      const preRes = await postPreprocess(
+        authedRequest(`http://localhost/api/photos/${originalId}/preprocess`, { method: 'POST' }),
+        { params: Promise.resolve({ id: String(originalId) }) },
+      );
+      const preBody = (await preRes.json()) as { photo?: unknown; quality?: unknown };
+      expectStatus('POST /api/photos/:id/preprocess', preRes, 200);
+      parseWith('POST /api/photos/:id/preprocess.photo', photoSchema, preBody.photo);
+      parseWith('POST /api/photos/:id/preprocess.quality', qualitySchema, preBody.quality);
+
+      const fileRes = await getPhotoFile(authedRequest(`http://localhost/api/photos/${originalId}/file`), {
+        params: Promise.resolve({ id: String(originalId) }),
+      });
+      checked += 1;
+      const fileType = fileRes.headers.get('content-type') ?? '';
+      const fileBytes = (await fileRes.arrayBuffer()).byteLength;
+      if (fileRes.status !== 200 || !fileType.startsWith('image/') || fileBytes === 0) {
+        failures.push(`GET /api/photos/:id/file：${fileRes.status}/${fileType}/${fileBytes}B`);
+      }
+
+      // ⑫ GET /api/photos（未呈现集，独立游标）
+      const listRes = await getPhotos(authedRequest('http://localhost/api/photos'), { params: Promise.resolve({}) });
+      expectStatus('GET /api/photos', listRes, 200);
+      parseWith('GET /api/photos', photoListSchema, await listRes.json());
+
+      // ⑬ POST /api/anchors → ⑭ GET /api/anchors/:id（改上传图建锚点，202 形状校验；跑到 succeeded
+      // 的真实链路归 `E2E-01` / `E2E-10`，这里不重复驱动 extraction）
+      const anchorRes = await postAnchor(
+        authedRequest('http://localhost/api/anchors', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ photoIds: [originalId] }),
+        }),
+        { params: Promise.resolve({}) },
+      );
+      const anchorBody = (await anchorRes.json()) as { anchor?: { id?: number } };
+      expectStatus('POST /api/anchors', anchorRes, 202);
+      parseWith('POST /api/anchors', anchorSchema, anchorBody.anchor);
+      const anchorId = anchorBody.anchor?.id ?? null;
+      if (anchorId !== null) {
+        const anchorGetRes = await getAnchor(authedRequest(`http://localhost/api/anchors/${anchorId}`), {
+          params: Promise.resolve({ id: String(anchorId) }),
+        });
+        expectStatus('GET /api/anchors/:id', anchorGetRes, 200);
+        parseWith('GET /api/anchors/:id', anchorSchema, ((await anchorGetRes.json()) as { anchor?: unknown }).anchor);
+      }
+
+      // ⑮ POST /api/anchors/:id/confirm（用 succeeded 夹具锚点，不依赖夹具图的质量评分）
+      const confirmSeedAnchor = makeSucceededAnchor();
+      const confirmRes = await postConfirm(
+        authedRequest(`http://localhost/api/anchors/${confirmSeedAnchor}/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirmed: true, consents: ['photo_usage', 'family_agreement'] }),
+        }),
+        { params: Promise.resolve({ id: String(confirmSeedAnchor) }) },
+      );
+      const confirmBody = (await confirmRes.json()) as { anchor?: unknown; consents?: unknown };
+      expectStatus('POST /api/anchors/:id/confirm', confirmRes, 200);
+      parseWith('POST /api/anchors/:id/confirm.anchor', anchorSchema, confirmBody.anchor);
+      checked += 1;
+      if (!Array.isArray(confirmBody.consents)) failures.push('POST /api/anchors/:id/confirm.consents 非数组');
+
+      // ⑯ POST /api/anchors/:id/retry → ⑰ DELETE /api/anchors/:id（一次性锚点，不动链路锚点）
+      const retrySeedAnchor = makeSucceededAnchor();
+      const anchorRetryRes = await postAnchorRetry(
+        authedRequest(`http://localhost/api/anchors/${retrySeedAnchor}/retry`, { method: 'POST' }),
+        { params: Promise.resolve({ id: String(retrySeedAnchor) }) },
+      );
+      const anchorRetryBody = (await anchorRetryRes.json()) as { anchor?: { id?: number } };
+      expectStatus('POST /api/anchors/:id/retry', anchorRetryRes, 202);
+      parseWith('POST /api/anchors/:id/retry', anchorSchema, anchorRetryBody.anchor);
+      const retriedAnchorId = anchorRetryBody.anchor?.id ?? null;
+      if (retriedAnchorId !== null) {
+        const deleteAnchorRes = await deleteAnchorRoute(
+          authedRequest(`http://localhost/api/anchors/${retriedAnchorId}`, { method: 'DELETE' }),
+          { params: Promise.resolve({ id: String(retriedAnchorId) }) },
+        );
+        expectStatus('DELETE /api/anchors/:id', deleteAnchorRes, 200);
+        expectKeys('DELETE /api/anchors/:id', (await deleteAnchorRes.json()) as Record<string, unknown>, [
+          'ok',
+          'cascaded',
+        ]);
+      }
+
+      // ⑱–㉒ 生成链路：POST → GET → 跑 handler → retry → feedback（用**盘上有文件**的夹具锚点，
+      // 以便跑出结果行给 `POST /api/results/:id/feedback` 用）
+      {
+        raiseQuotaForGenerationChecks();
+        snapshotUsage();
+        const generationSeedAnchor = await makeGeneratableAnchor();
+        const generationRes = await postGeneration(
+          authedRequest('http://localhost/api/generations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ anchorId: generationSeedAnchor, eraCode: 'E4', sceneId: 3, count: 2 }),
+          }),
+          { params: Promise.resolve({}) },
+        );
+        const generationBody = (await generationRes.json()) as { generation?: { id?: number } };
+        expectStatus('POST /api/generations', generationRes, 202);
+        parseWith('POST /api/generations', generationSchema, generationBody.generation);
+        const generationId = generationBody.generation?.id ?? null;
+        if (generationId !== null) {
+          cleanups.push(() => purgeGeneration(generationId));
+          const generationGetRes = await getGeneration(
+            authedRequest(`http://localhost/api/generations/${generationId}`),
+            { params: Promise.resolve({ id: String(generationId) }) },
+          );
+          expectStatus('GET /api/generations/:id', generationGetRes, 200);
+          parseWith(
+            'GET /api/generations/:id',
+            generationSchema,
+            ((await generationGetRes.json()) as { generation?: unknown }).generation,
+          );
+
+          for (let tries = 0; tries < 5; tries += 1) {
+            if (['succeeded', 'failed', 'partial'].includes(generationRow(generationId).status)) break;
+            const record = findGenerationById(generationId);
+            if (record !== null) await runGenerateJob(record);
+          }
+
+          const generationRetryRes = await postGenerationRetry(
+            authedRequest(`http://localhost/api/generations/${generationId}/retry`, { method: 'POST' }),
+            { params: Promise.resolve({ id: String(generationId) }) },
+          );
+          const generationRetryBody = (await generationRetryRes.json()) as { generation?: { id?: number } };
+          expectStatus('POST /api/generations/:id/retry', generationRetryRes, 202);
+          parseWith('POST /api/generations/:id/retry', generationSchema, generationRetryBody.generation);
+          const retriedGenerationId = generationRetryBody.generation?.id;
+          if (typeof retriedGenerationId === 'number') {
+            // retry 产生的新行是非终态：必须**立刻**收回，否则它会挡住后续用例的排他检查
+            // （`409 GENERATION_IN_PROGRESS`，`spec/03-接口契约.md` §3.5 第 8 步）。
+            purgeGeneration(retriedGenerationId);
+          }
+
+          const firstResult = getDb()
+            .prepare('SELECT id FROM generation_results WHERE generation_id = ? ORDER BY ordinal LIMIT 1')
+            .get(generationId) as { id: number } | undefined;
+          if (firstResult === undefined) {
+            failures.push('POST /api/results/:id/feedback：链路生成没有结果行');
+          } else {
+            const feedbackRes = await postFeedback(
+              authedRequest(`http://localhost/api/results/${firstResult.id}/feedback`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ feedback: 1 }),
+              }),
+              { params: Promise.resolve({ id: String(firstResult.id) }) },
+            );
+            expectStatus('POST /api/results/:id/feedback', feedbackRes, 200);
+            parseWith(
+              'POST /api/results/:id/feedback',
+              generationResultSchema,
+              ((await feedbackRes.json()) as { result?: unknown }).result,
+            );
+          }
+        }
+      }
+
+      // ㉓ GET /api/history
+      const historyRes = await getHistory(authedRequest('http://localhost/api/history'), {
+        params: Promise.resolve({}),
+      });
+      expectStatus('GET /api/history', historyRes, 200);
+      parseWith('GET /api/history', historyListSchema, await historyRes.json());
+
+      // ㉔ POST /api/prompt-reverse-jobs → ㉕ GET /api/prompt-reverse-jobs/:id
+      const reverseRes = await reversePost({ photoId: originalId });
+      const reverseBody = (await reverseRes.json()) as { job?: { id?: number } };
+      expectStatus('POST /api/prompt-reverse-jobs', reverseRes, 202);
+      parseWith('POST /api/prompt-reverse-jobs', promptReverseJobSchema, reverseBody.job);
+      const jobId = reverseBody.job?.id ?? null;
+      if (jobId !== null) {
+        cleanups.push(() => getDb().prepare('DELETE FROM prompt_reverse_jobs WHERE id = ?').run(jobId));
+        const reverseGetRes = await reverseGet(jobId);
+        expectStatus('GET /api/prompt-reverse-jobs/:id', reverseGetRes, 200);
+        parseWith(
+          'GET /api/prompt-reverse-jobs/:id',
+          promptReverseJobSchema,
+          ((await reverseGetRes.json()) as { job?: unknown }).job,
+        );
+      }
+
+      // ㉖ DELETE /api/photos/:id（最后删原图，级联软删链路派生物）
+      const deletePhotoRes = await deletePhotoRoute(
+        authedRequest(`http://localhost/api/photos/${originalId}`, { method: 'DELETE' }),
+        { params: Promise.resolve({ id: String(originalId) }) },
+      );
+      expectStatus('DELETE /api/photos/:id', deletePhotoRes, 200);
+      expectKeys('DELETE /api/photos/:id', (await deletePhotoRes.json()) as Record<string, unknown>, [
+        'ok',
+        'cascaded',
+      ]);
+
+      return finish();
+    },
+  },
+  {
+    // `API-04`（`spec/03-接口契约.md` §3.2 / §3.3 / §3.5、`modules/M01` §6.3、`modules/M08` §5）：跨用户
+    // 访问一律 `404 NOT_FOUND`（不返回 403，避免用 403 泄漏「资源存在但不属于你」）。
+    id: 'API-04',
+    dependsOn: ['API-01'],
+    run: async () => {
+      raiseQuotaForGenerationChecks();
+      snapshotUsage();
+      const other = makeVerifiedUser();
+      const anchorId = makeReadyAnchor();
+      const generation = await createFor(anchorId, 2);
+      cleanups.push(() => purgeGeneration(generation.id));
+      const photoId = sharedPreprocessedPhoto();
+      const probes: string[] = [];
+      /** 每个探针都跑完再合并（不短路）：`code` 用契约里该端点对「不存在 / 他人资源」的专属错误码。 */
+      const expect404 = async (label: string, res: Response, allowed: string[]): Promise<boolean> => {
+        const code = await encodeErrorCode(res);
+        probes.push(`${label}=${res.status}/${code}`);
+        return res.status === 404 && allowed.includes(code);
+      };
+      // 判定顺序固定：先归属后权限（`modules/M04` §5.3）——锚点侧是 `ANCHOR_NOT_FOUND`，
+      // 照片 / 生成侧共用 `NOT_FOUND`（不返回 403，`API-04`）。
+      const notFound = ['NOT_FOUND'];
+      const anchorNotFound = ['ANCHOR_NOT_FOUND', 'NOT_FOUND'];
+      const anchorProbe = await getAnchor(
+        requestWithUser(other, `http://localhost/api/anchors/${anchorId}`),
+        { params: Promise.resolve({ id: String(anchorId) }) },
+      );
+      const generationProbe = await getGeneration(
+        requestWithUser(other, `http://localhost/api/generations/${generation.id}`),
+        { params: Promise.resolve({ id: String(generation.id) }) },
+      );
+      const fileProbe = await getPhotoFile(
+        requestWithUser(other, `http://localhost/api/photos/${photoId}/file`),
+        { params: Promise.resolve({ id: String(photoId) }) },
+      );
+      const deleteProbe = await deletePhotoRoute(
+        requestWithUser(other, `http://localhost/api/photos/${photoId}`, { method: 'DELETE' }),
+        { params: Promise.resolve({ id: String(photoId) }) },
+      );
+      const createProbe = await postGeneration(
+        requestWithUser(other, 'http://localhost/api/generations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ anchorId, eraCode: 'E2', sceneId: 1, count: 2 }),
+        }),
+        { params: Promise.resolve({}) },
+      );
+      const results = [
+        await expect404('GET /api/anchors/:id', anchorProbe, anchorNotFound),
+        await expect404('GET /api/generations/:id', generationProbe, notFound),
+        await expect404('GET /api/photos/:id/file', fileProbe, notFound),
+        await expect404('DELETE /api/photos/:id', deleteProbe, notFound),
+        await expect404('POST /api/generations', createProbe, anchorNotFound),
+      ];
+      const ok = results.every(Boolean);
+      // 这一步为判定造了一条 `DEV_USER` 的生成行，立刻收回，避免挡住后续用例的排他检查。
+      purgeGeneration(generation.id);
+      return {
+        ok,
+        expected: '他人资源一律 404（不返回 403）：GET 锚点 / GET 生成 / 取图 / 删图 / 用他人锚点发起生成',
+        actual: probes.join('  '),
+      };
+    },
+  },
+  {
+    // `SEC-06`（`spec/03-接口契约.md` §3.3 校验顺序、`modules/M03` §5.3）：`kind='generated'` 的照片
+    // 不能作为锚点提取输入（防链式自举），且必须**在任何写操作之前**拦下。
+    id: 'SEC-06',
+    run: async () => {
+      const generatedPhotoId = insertGeneratedPhoto();
+      const before = count('identity_anchors');
+      const res = await postAnchor(
+        authedRequest('http://localhost/api/anchors', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ photoIds: [generatedPhotoId] }),
+        }),
+        { params: Promise.resolve({}) },
+      );
+      const code = await encodeErrorCode(res);
+      const after = count('identity_anchors');
+      return {
+        ok: res.status === 400 && code === 'INVALID_PARAM' && after === before,
+        expected: '400 INVALID_PARAM 且不产生 identity_anchors 行',
+        actual: `${res.status}/${code}，anchors ${before}→${after}`,
+      };
+    },
+  },
+  {
+    // `ERR-03`（`modules/M06-生成编排.md` §5.8、`spec/08-本地开发指南.md` §5.1）：上游 `InvalidParameter`
+    // （size 低于下限）→ `INTERNAL`、不可重试（`attempt` 不动），且**不把上游原文透给用户**。
+    id: 'ERR-03',
+    run: () =>
+      withGeneration(2, async ({ id }) => {
+        const provider = getArk() as MockArkProvider;
+        provider.setFailure('invalid-size');
+        try {
+          await runGeneration(id);
+          const row = generationRow(id);
+          const res = await getGeneration(authedRequest(`http://localhost/api/generations/${id}`), {
+            params: Promise.resolve({ id: String(id) }),
+          });
+          const body = (await res.json()) as { generation?: { error?: { code?: string; message?: string } } };
+          const error = body.generation?.error ?? null;
+          const leaked = JSON.stringify(body).includes('image size must be at least');
+          return {
+            ok:
+              row.status === 'failed' &&
+              row.error_code === 'INTERNAL' &&
+              row.attempt === 0 &&
+              error?.code === 'INTERNAL' &&
+              error?.message === ERROR_MESSAGE.INTERNAL &&
+              !leaked,
+            expected: 'failed / INTERNAL / attempt=0、响应用通用文案且不含上游原文',
+            actual: `${row.status}/${row.error_code}/attempt=${row.attempt}，error.message=${error?.message ?? '-'}，泄漏上游原文=${leaked}`,
+          };
+        } finally {
+          provider.setFailure(null);
+        }
+      }),
+  },
+  {
+    // `CMP-02`（`spec/06-合规与风控.md` §6.2 第 11 行 / §9.1、`spec/07-验收标准.md` §2.8）：静态扫描
+    // `app/` / `components/` / `src/` 的源码文本（去注释后是「字符串字面量与 JSX 文本」的超集）。
+    // 适用面是**用户可见文案**，故跳过测试文件（它们按约定枚举禁用词当负例）与 prompt 正文资产
+    // （`src/server/prompt/*` 的「不是修复照片」是给模型看的指令，不是用户可见文案）。
+    id: 'CMP-02',
+    run: () => {
+      const banned = [
+        '复活',
+        '重生',
+        '重获新生',
+        '一键还原青春',
+        '年轻时的样子',
+        '完美的全家福',
+        '太棒了',
+        '奇迹',
+        '惊喜',
+        '修复',
+        '逝者',
+        '离开的人',
+      ];
+      // 单词边界：`data` / `start` 里的 `ta` 不算，只有作为独立词的 `ta` 命中（`pages/P00` §9.3 的 `让ta回来`）。
+      const standaloneTa = /(?<![A-Za-z])ta(?![A-Za-z])/;
+      const stripComments = (text: string): string =>
+        text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+      const offenders: string[] = [];
+      const scan = (dir: string): void => {
+        if (!fs.existsSync(dir)) return;
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            scan(full);
+            continue;
+          }
+          if (!/\.tsx?$/.test(entry.name) || /\.test\.tsx?$/.test(entry.name)) continue;
+          const rel = path.relative(process.cwd(), full).split(path.sep).join('/');
+          if (rel.startsWith('src/server/prompt/')) continue;
+          const text = stripComments(fs.readFileSync(full, 'utf8'));
+          const hits = banned.filter((word) => text.includes(word));
+          if (standaloneTa.test(text)) hits.push('ta');
+          if (hits.length > 0) offenders.push(`${rel}(${hits.join('/')})`);
+        }
+      };
+      for (const root of ['app', 'components', 'src']) scan(root);
+      return {
+        ok: offenders.length === 0,
+        expected: '0 命中 `spec/06-合规与风控.md` §9.1 的禁用词',
+        actual: offenders.length === 0 ? '0 命中' : `${offenders.length} 命中 ${offenders.join(',')}`,
+      };
+    },
+  },
+  {
+    // `E2E-02`（`spec/07-验收标准.md` §2.4、`spec/01-领域模型与数据库.md` §3.5）：真实链路产出的
+    // `identity_anchors.anchor_text` 非空且长度 ∈ 60–120 字符。
+    id: 'E2E-02',
+    run: async () => {
+      const chain = await driveSampleChain();
+      const length = Array.from(chain.anchorText).length;
+      const chainNote = chain.problems.length === 0 ? '' : `（链路问题：${chain.problems.join('；')}）`;
+      return {
+        ok: length >= 60 && length <= 120,
+        expected: 'anchor_text 非空且长度 ∈ 60–120 字符',
+        actual: `${length} 字符${chainNote}`,
+      };
+    },
+  },
+  {
+    // `E2E-03`（`spec/07-验收标准.md` §2.4、`modules/M06` §5.1）：`generations.prompt` 与
+    // `buildGenerationDraft(anchorText, era, scene, profile)` 的输出**逐字符相等**（不另算、不改写）。
+    id: 'E2E-03',
+    run: () =>
+      withGeneration(2, async ({ id }) => {
+        const row = getDb()
+          .prepare('SELECT anchor_id, era_code, scene_id, prompt FROM generations WHERE id = ?')
+          .get(id) as { anchor_id: number; era_code: string; scene_id: number; prompt: string };
+        const anchor = getDb().prepare('SELECT anchor_text FROM identity_anchors WHERE id = ?').get(row.anchor_id) as
+          | { anchor_text: string | null }
+          | undefined;
+        const era = getEra(row.era_code);
+        const scene = getScene(row.scene_id);
+        const anchorText = anchor?.anchor_text ?? '';
+        if (era === null || scene === null || anchorText === '') {
+          return { ok: false, expected: '与 buildGenerationDraft 输出逐字符相等', actual: '取不到 era / scene / anchor_text' };
+        }
+        const expected = buildGenerationDraft({
+          anchorText,
+          era,
+          scene,
+          profile: getProfile(row.era_code, row.scene_id),
+        }).prompt;
+        return {
+          ok: row.prompt === expected,
+          expected: 'generations.prompt 与 buildGenerationDraft 输出逐字符相等',
+          actual:
+            row.prompt === expected
+              ? `相等（${row.prompt.length} 字符）`
+              : `不等（落库 ${row.prompt.length} / 重算 ${expected.length}）`,
+        };
+      }),
+  },
+  {
+    // `E2E-10`（`spec/07-验收标准.md` §2.4）：整条链路闭环——生成全 `succeeded`、锚点 `succeeded`、
+    // 结果张数与 `ordinal` 连续、「无手工改库」的机器化代理是 confirm / generation.create 审计齐全。
+    id: 'E2E-10',
+    run: async () => {
+      const chain = await driveSampleChain();
+      if (chain.problems.length > 0 || chain.anchorId === null || chain.generationId === null) {
+        return {
+          ok: false,
+          expected: '全链路闭环：无手工改库、无 failed / partial 残留',
+          actual: chain.problems.join('；') || '链路未产出锚点 / 生成',
+        };
+      }
+      const anchorStatuses = chain.newAnchorIds.map(
+        (id) =>
+          (getDb().prepare('SELECT status FROM identity_anchors WHERE id = ?').get(id) as { status: string } | undefined)
+            ?.status ?? 'missing',
+      );
+      const generationStatuses = chain.newGenerationIds.map((id) => generationRow(id).status);
+      const results = resultRows(chain.generationId);
+      const confirmAudit = (
+        getDb()
+          .prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'anchor.confirm' AND target = ?")
+          .get(`anchor:${chain.anchorId}`) as { n: number }
+      ).n;
+      const createAudit = (
+        getDb()
+          .prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'generation.create' AND target = ?")
+          .get(`generation:${chain.generationId}`) as { n: number }
+      ).n;
+      const ok =
+        generationStatuses.every((status) => status === 'succeeded') &&
+        anchorStatuses.every((status) => status === 'succeeded') &&
+        results.length === 2 &&
+        results.every((row, index) => row.ordinal === index) &&
+        confirmAudit >= 1 &&
+        createAudit >= 1;
+      return {
+        ok,
+        expected:
+          '全链路闭环：生成全部 succeeded、锚点 succeeded、结果 2 张且 ordinal 连续、confirm / generation.create 审计齐全',
+        actual: `生成 ${generationStatuses.join(',') || '(无)'}、锚点 ${anchorStatuses.join(',') || '(无)'}、结果 ${results.length} 张、confirm 审计 ${confirmAudit}、create 审计 ${createAudit}`,
+      };
+    },
+  },
+);
 
 const main = async (): Promise<void> => {
   // `spec/07-验收标准.md` §2 前置：mock provider（未显式设置时默认 mock，避免 Windows 下 shell 前缀不通用）。

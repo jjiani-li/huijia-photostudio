@@ -21,6 +21,8 @@
     "lint": "eslint .",
     "check": "tsc --noEmit && eslint .",
     "check:acceptance": "tsx scripts/acceptance.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "check:blind": "tsx scripts/blind.ts",
     "check:docs": "node scripts/check-docs.mjs",
     "test:docs": "node --test scripts/check-docs.test.mjs"
   },
