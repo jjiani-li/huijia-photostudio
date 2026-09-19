@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { apiRequest, type ApiNotice } from '../../src/shared/api-client';
+import { apiRequest, toErrorNotice, type ApiNotice } from '../../src/shared/api-client';
 import { hasUnauthenticated, loginPath } from '../../src/shared/session';
 import type { Anchor, Photo, Quality } from '../../src/shared/types';
 import { pickFiles } from '../../src/shared/upload';
@@ -14,7 +14,6 @@ import {
   anchorRequest,
   extractDisabled,
   isAllUnusable,
-  noticeOf,
   selectBaseline,
   successfulPhotos,
   type UploadCard,
@@ -64,7 +63,7 @@ export function UploadPanel(): ReactNode {
       patch(key, { preprocessedPhoto: processed.photo, quality: processed.quality, phase: 'ready' });
     } catch (err) {
       // 失败只影响这一张：该行进 `UploadErrorList`，其余卡不动（`pages/P01` §4.2）。
-      patch(key, { phase: 'error', error: noticeOf(err) });
+      patch(key, { phase: 'error', error: toErrorNotice(err) });
     }
   };
 
@@ -79,15 +78,15 @@ export function UploadPanel(): ReactNode {
       filesRef.current.set(key, file);
       return { key, file };
     });
-    // 按**整批选择顺序**取前 5 张（`pages/P01` §4.2）；上限判定复用 `src/shared/upload.ts` 的 `pickFiles`。
-    const { selected, overflow } = pickFiles([
-      ...cards.map((card) => ({ key: card.key, file: null as File | null })),
-      ...added,
-    ]);
-    const keep = new Set(selected.map((item) => item.key));
-    for (const card of cards) {
+    // 上限判定复用 `src/shared/upload.ts` 的 `pickFiles`：按**整批选择顺序**取前 5 张
+    //（`pages/P01` §4.2）。既有卡在序列里永远排在新增卡之前，所以超限只会挤掉本次新选的。
+    const { selected, overflow } = pickFiles(
+      [...cards.map((card) => card.key), ...added.map((item) => item.key)],
+    );
+    const keep = new Set(selected);
+    for (const key of [...filesRef.current.keys()]) {
       // 超出上限的既有卡不再呈现；它的上传结果也就落空了（本页删除只发生在 local state）。
-      if (!keep.has(card.key)) filesRef.current.delete(card.key);
+      if (!keep.has(key)) filesRef.current.delete(key);
     }
     setOverflowCount(overflow.length);
     setCards((current) => [
@@ -136,7 +135,7 @@ export function UploadPanel(): ReactNode {
     setSubmitError(null);
     apiRequest<{ anchor: Anchor }>('/api/anchors', { method: 'POST', body: request })
       .then((res) => router.push(`/confirm/${res.anchor.id}`))
-      .catch((err: unknown) => setSubmitError(noticeOf(err)))
+      .catch((err: unknown) => setSubmitError(toErrorNotice(err)))
       .finally(() => setBusy(false));
   };
 

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import type { ApiNotice } from '../src/shared/api-client';
-import { ERROR_CODES } from '../src/shared/types';
+import { isErrorCode } from '../src/shared/error-message';
 
 /**
  * `ErrorNotice`（`docs/prd/pages/P00-设计基准与路由.md` §8）：`docs/prd/spec/03-接口契约.md` §5 错误码在
@@ -26,20 +26,18 @@ export interface ErrorShape {
 }
 
 /** 未知 `code` 归 `INTERNAL`（§8）。 */
-const knownCode = (code: string): string => ((ERROR_CODES as readonly string[]).includes(code) ? code : 'INTERNAL');
-
 const PAGE_CODES = ['UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'ANCHOR_NOT_FOUND'];
 const HISTORY_CODES = ['FORBIDDEN', 'NOT_FOUND', 'ANCHOR_NOT_FOUND'];
 const RETRY_CODES = ['PROVIDER_ERROR', 'PROVIDER_TIMEOUT', 'STORAGE_ERROR', 'INTERNAL'];
 
 export const errorShape = (code: string): ErrorShape => {
-  const known = knownCode(code);
+  const known = isErrorCode(code) ? code : 'INTERNAL';
   return { variant: PAGE_CODES.includes(known) ? 'page' : 'inline', retryable: RETRY_CODES.includes(known) };
 };
 
 export function ErrorNotice({ error, variant, onRetry, action }: ErrorNoticeProps): ReactNode {
   if (error === null) return null;
-  const known = knownCode(error.code);
+  const known = isErrorCode(error.code) ? error.code : 'INTERNAL';
   const shape = errorShape(error.code);
   const finalVariant = variant ?? shape.variant;
   const defaultAction =

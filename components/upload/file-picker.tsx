@@ -18,18 +18,11 @@ export interface FilePickerProps {
   multiple: boolean;
   accept: string;
   disabled?: boolean;
-  label?: string;
   /** 只回传用户这一次选中的文件，顺序即选择顺序。 */
   onPick: (files: File[]) => void;
 }
 
-export function FilePicker({
-  multiple,
-  accept,
-  disabled = false,
-  label = PICK_LABEL,
-  onPick,
-}: FilePickerProps): ReactNode {
+export function FilePicker({ multiple, accept, disabled = false, onPick }: FilePickerProps): ReactNode {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const onChange = (event: ChangeEvent<HTMLInputElement>): void => {
@@ -58,7 +51,7 @@ export function FilePicker({
             : 'rounded-pill bg-primary px-2xl py-md text-body text-background'
         }
       >
-        {label}
+        {PICK_LABEL}
       </button>
     </div>
   );

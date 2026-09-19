@@ -6,7 +6,7 @@ import { FilePicker } from './file-picker';
 import { FooterNote } from './footer-note';
 import { PhotoQualityCard } from './photo-quality-card';
 import { UploadErrorList } from './upload-error-list';
-import { WorkerBanner } from './worker-banner';
+import { WorkerNotice } from '../worker-notice';
 import {
   ALL_UNUSABLE_COPY,
   EMPTY_COPY,
@@ -69,7 +69,7 @@ export function UploadView({
   const shown = visibleCards(cards);
   return (
     <section className="flex flex-col gap-2xl animate-fade-in">
-      <WorkerBanner alive={workerAlive} />
+      <WorkerNotice alive={workerAlive} visible />
 
       <header className="flex flex-col gap-sm">
         <h1 className="font-serif text-title text-ink">{UPLOAD_TITLE}</h1>

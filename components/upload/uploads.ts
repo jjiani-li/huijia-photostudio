@@ -6,21 +6,10 @@
  * 选文件的上限与基准图排序在 `src/shared/upload.ts`（`pickFiles` / `pickBaseline`），这里只做组装。
  */
 import type { Photo, PromptReverseJob, Quality } from '../../src/shared/types';
-import { ApiClientError, type ApiNotice } from '../../src/shared/api-client';
-import { apiErrorMessage } from '../../src/shared/api-error-message';
+import type { ApiNotice } from '../../src/shared/api-client';
+import { errorMessageOf } from '../../src/shared/error-message';
 import { SAFETY_NOTICE_TEXT } from '../../src/shared/safety-notice';
 import { pickBaseline } from '../../src/shared/upload';
-
-/**
- * 服务端 `error.message` 优先（`pages/P01` §5）；没有 envelope 的网络级失败（`fetch` 抛 TypeError）
- * 与空 message 用 `apiErrorMessage(code)` 兜底，不把技术串呈现给用户（`src/shared/api-error-message.ts`）。
- */
-export const noticeOf = (err: unknown): ApiNotice => {
-  if (err instanceof ApiClientError) {
-    return { code: err.code, message: err.message.trim() === '' ? apiErrorMessage(err.code) : err.message };
-  }
-  return { code: 'INTERNAL', message: apiErrorMessage('INTERNAL') };
-};
 
 // ── 逐字文案（`pages/P01` §4.2、§4.4 的表格；前端不另写、不改写）────────────────────────────
 
@@ -102,7 +91,7 @@ export const visibleCards = (cards: readonly UploadCard[]): VisibleCard[] =>
 export interface UploadErrorRow {
   key: string;
   fileName: string;
-  code: string;
+  /** 服务端 `error.message` 原文（网络层失败时是 `errorMessageOf` 的兜底文案）。 */
   message: string;
 }
 
@@ -112,7 +101,6 @@ export const errorRows = (cards: readonly UploadCard[]): UploadErrorRow[] =>
     .map((card) => ({
       key: card.key,
       fileName: card.fileName,
-      code: card.error?.code ?? 'INTERNAL',
       message: card.error?.message ?? '',
     }));
 
@@ -219,12 +207,15 @@ export const reverseDetails = (resultJson: Record<string, unknown> | null): Reve
         return typeof value === 'string' && value !== '' ? [{ key, label, value }] : [];
       });
 
-/** 两个推荐都是 `null` → 不给采纳按钮，改提示用户自己选（`pages/P01` §4.4）。 */
+/**
+ * 两个推荐**都**非空才给采纳按钮（`pages/P01` §4.4：`suggestEraCode` **或** `suggestSceneId` 为 `null`
+ * 时不给采纳，改提示用户自己选——两个都要，采纳才等价于手选完年代与场景）。
+ */
 export const canAdoptReverse = (job: PromptReverseJob | null): boolean =>
-  job !== null && (job.suggestEraCode !== null || job.suggestSceneId !== null);
+  job !== null && job.suggestEraCode !== null && job.suggestSceneId !== null;
 
 /** `status='failed'` 的反推任务 → `ErrorNotice` 的入参（`pages/P01` §4.4：取服务端 `error.message`）。 */
 export const reverseJobNotice = (job: PromptReverseJob | null): ApiNotice | null =>
   job !== null && job.status === 'failed'
-    ? { code: job.error?.code ?? 'INTERNAL', message: job.error?.message ?? apiErrorMessage('INTERNAL') }
+    ? { code: job.error?.code ?? 'INTERNAL', message: job.error?.message ?? errorMessageOf('INTERNAL') }
     : null;

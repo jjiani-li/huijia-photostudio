@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { ApiClientError, apiRequest, type ApiNotice } from '../../src/shared/api-client';
+import { ApiClientError, apiRequest, toErrorNotice, type ApiNotice } from '../../src/shared/api-client';
 import { adoptReverseSuggestion } from '../../src/shared/reverse-suggestion';
 import { hasUnauthenticated, loginPath } from '../../src/shared/session';
 import type { Photo, PromptReverseJob } from '../../src/shared/types';
@@ -24,7 +24,6 @@ import {
   REVERSE_RUNNING_COPY,
   REVERSE_TITLE,
   canAdoptReverse,
-  noticeOf,
   reverseDetails,
   reverseJobNotice,
 } from './uploads';
@@ -73,7 +72,7 @@ export function ReversePromptPanel({ photos, baselinePhotoId }: ReversePromptPan
       body: { photoId: selectedPhotoId },
     })
       .then((res) => setJobId(res.job.id))
-      .catch((err: unknown) => setStartNotice(noticeOf(err)));
+      .catch((err: unknown) => setStartNotice(toErrorNotice(err)));
   }, [expanded, selectedPhotoId, startedPhotoId]);
 
   const fetchJob = useCallback((): Promise<PromptReverseJob> => {

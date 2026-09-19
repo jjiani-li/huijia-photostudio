@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { ApiClientError } from '../../src/shared/api-client';
 import type { Photo, Quality } from '../../src/shared/types';
 import {
   anchorRequest,
@@ -8,7 +7,6 @@ import {
   extractDisabled,
   isAllUnusable,
   isInFlight,
-  noticeOf,
   photoIds,
   reverseDetails,
   reverseJobNotice,
@@ -188,7 +186,7 @@ describe('卡片与错误行（§4.2 的组件树）', () => {
     ];
     expect(visibleCards(cards).map((item) => item.key)).toEqual(['a']);
     expect(errorRows(cards)).toEqual([
-      { key: 'b', fileName: 'b.jpg', code: 'FILE_TOO_LARGE', message: '这张照片太大了，换一张小一点的' },
+      { key: 'b', fileName: 'b.jpg', message: '这张照片太大了，换一张小一点的' },
     ]);
   });
 
@@ -201,21 +199,6 @@ describe('卡片与错误行（§4.2 的组件树）', () => {
         card({ key: 'b', phase: 'error', photoId: null, quality: null, preprocessedPhotoId: null }),
       ]),
     ).toBe(false);
-  });
-});
-
-describe('失败文案的取舍（§5、`src/shared/api-error-message.ts`）', () => {
-  it('服务端 `error.message` 原样优先', () => {
-    const err = new ApiClientError('FILE_TOO_LARGE', '这张照片太大了，换一张小一点的', 413);
-    expect(noticeOf(err)).toEqual({ code: 'FILE_TOO_LARGE', message: '这张照片太大了，换一张小一点的' });
-  });
-
-  it('没有 envelope（网络级失败）或空 message → 用 `apiErrorMessage` 兜底，不露出技术串', () => {
-    expect(noticeOf(new TypeError('Failed to fetch'))).toEqual({ code: 'INTERNAL', message: '出了点小问题，请重试' });
-    expect(noticeOf(new ApiClientError('STORAGE_ERROR', '   ', 500))).toEqual({
-      code: 'STORAGE_ERROR',
-      message: '保存失败，请重试',
-    });
   });
 });
 
@@ -236,7 +219,7 @@ describe('反推结果的展示投影（§4.4）', () => {
     expect(reverseDetails(null)).toEqual([]);
   });
 
-  it('两个推荐都为 `null` → 不可采纳；任一非空即可采纳', () => {
+  it('两个推荐都非空才可采纳（任一为 `null` 都不给采纳按钮）', () => {
     const job = (suggestEraCode: string | null, suggestSceneId: number | null) => ({
       id: 1,
       status: 'succeeded' as const,
@@ -251,8 +234,9 @@ describe('反推结果的展示投影（§4.4）', () => {
       finishedAt: null,
     });
     expect(canAdoptReverse(job(null, null))).toBe(false);
-    expect(canAdoptReverse(job('E2', null))).toBe(true);
-    expect(canAdoptReverse(job(null, 3))).toBe(true);
+    expect(canAdoptReverse(job('E2', null))).toBe(false);
+    expect(canAdoptReverse(job(null, 3))).toBe(false);
+    expect(canAdoptReverse(job('E2', 3))).toBe(true);
     expect(canAdoptReverse(null)).toBe(false);
   });
 

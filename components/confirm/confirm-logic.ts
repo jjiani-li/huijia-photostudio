@@ -1,5 +1,5 @@
 import { getFieldNames, type ApiNotice } from '../../src/shared/api-client';
-import { apiErrorMessage } from '../../src/shared/api-error-message';
+import { errorMessageOf } from '../../src/shared/error-message';
 import { CONSENT_SCOPES, type Anchor, type AnchorFeatures, type ConsentScope } from '../../src/shared/types';
 
 /**
@@ -115,5 +115,5 @@ export const chooseHref = (anchorId: number): string => `/choose/${anchorId}`;
  */
 export const FAILED_FALLBACK_NOTICE: ApiNotice = {
   code: 'INTERNAL',
-  message: apiErrorMessage('INTERNAL'),
+  message: errorMessageOf('INTERNAL'),
 };

@@ -65,11 +65,21 @@ describe('apiRequest', () => {
 });
 
 describe('toErrorNotice', () => {
-  it('ApiClientError → 原样；其他异常 → INTERNAL', () => {
+  it('ApiClientError → 原样；其他异常 → INTERNAL + 兜底文案（不透技术串）', () => {
     expect(toErrorNotice(new ApiClientError('CODE_INVALID', '验证码不对', 400))).toEqual({
       code: 'CODE_INVALID',
       message: '验证码不对',
     });
-    expect(toErrorNotice(new Error('boom'))).toEqual({ code: 'INTERNAL', message: 'boom' });
+    expect(toErrorNotice(new Error('Failed to fetch'))).toEqual({
+      code: 'INTERNAL',
+      message: '出了点小问题，请重试',
+    });
+  });
+
+  it('服务端 message 为空的边界 → 取错误码的兜底文案', () => {
+    expect(toErrorNotice(new ApiClientError('STORAGE_ERROR', '   ', 500))).toEqual({
+      code: 'STORAGE_ERROR',
+      message: '保存失败，请重试',
+    });
   });
 });

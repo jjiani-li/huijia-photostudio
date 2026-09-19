@@ -104,7 +104,7 @@ describe('useJobPolling · 规则 ⑤ 错误不吞 + 卸载即停', () => {
     p.start();
     await vi.advanceTimersByTimeAsync(0);
     expect(p.getState().phase).toBe('error');
-    expect(p.getState().error).toEqual({ code: 'INTERNAL', message: 'boom' });
+    expect(p.getState().error).toEqual({ code: 'INTERNAL', message: '出了点小问题，请重试' });
     await vi.advanceTimersByTimeAsync(10_000);
     expect(fetchJob).toHaveBeenCalledTimes(1);
   });

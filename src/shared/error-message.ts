@@ -1,19 +1,19 @@
 /**
- * 错误码 → 兜底文案的前端镜像（`docs/prd/pages/P01-上传与身份确认.md` §7）。
+ * 错误码 → 用户可见文案的**唯一代码侧镜像**（逐行对照 `docs/prd/spec/03-接口契约.md` §5 的
+ * 「用户可见文案」列；改表先改文档）。服务端与前端共用这一份，不再各存一版：
  *
- * **唯一事实源仍是 `docs/prd/spec/03-接口契约.md` §5**：前端一律优先展示服务端 `error.message`
- * （`spec/03-接口契约.md` §1.3），本表只用于**没有响应 envelope 的失败**（上传 / 预处理 / 确认
- * 过程中抛出的网络级异常，或服务端 `error.message` 为空的边界），避免把 `TypeError: Failed to fetch`
- * 这类技术串直接呈现给用户。
- *
- * 与 `src/server/domain/errors.ts` 的 `ERROR_MESSAGE` 是**同一张表的两侧镜像**：两者都逐行对照
- * `spec/03-接口契约.md` §5，改表先改文档、再同步这两处（`spec/09-施工纪律.md` §4 D13）。
- * `Record<ErrorCode, string>` 让穷尽性由类型检查兜住（少一个键即编译失败）。
+ * - 服务端：`src/server/domain/errors.ts` 的 `appError()` / `errorMessageOf()`（构造 `AppError` 与
+ *   投影库里的 `error_code`）；`docs/prd/spec/04-技术基线与目录结构.md` §4.1 规定响应里的
+ *   `error.message` 一律取本表，不回显库里的原文。
+ * - 前端：`components/confirm/*` 与 `components/upload/*` 的兜底——**凡有服务端 `error.message`
+ *   就一律以服务端为准**（`docs/prd/spec/03-接口契约.md` §1.3）；只有**没有响应 envelope 的网络级
+ *   失败**（`fetch` 抛 `TypeError`）或服务端 `message` 为空的边界才取本表，避免把 `Failed to fetch`
+ *   这类技术串呈现给用户（`docs/prd/pages/P01-上传与身份确认.md` §5、`pages/P00-设计基准与路由.md` §8）。
  */
 import { ERROR_CODES, type ErrorCode } from './types';
 
 /** 逐行对照 `docs/prd/spec/03-接口契约.md` §5 的「用户可见文案」列。 */
-export const API_ERROR_MESSAGE: Record<ErrorCode, string> = {
+export const ERROR_MESSAGE: Record<ErrorCode, string> = {
   UNAUTHENTICATED: '请先登录',
   FORBIDDEN: '没有权限访问这张照片',
   NOT_FOUND: '这张照片找不到了',
@@ -37,9 +37,10 @@ export const API_ERROR_MESSAGE: Record<ErrorCode, string> = {
   INTERNAL: '出了点小问题，请重试',
 };
 
+/** `ErrorCode` 的运行时判据（`components/error-notice.tsx` 与 `errorMessageOf` 共用）。 */
 export const isErrorCode = (code: string): code is ErrorCode =>
   (ERROR_CODES as readonly string[]).includes(code);
 
-/** 认不出的 `code` 兜底 `INTERNAL`（与 `components/error-notice.tsx` 的 `knownCode` 同一口径）。 */
-export const apiErrorMessage = (code: string): string =>
-  isErrorCode(code) ? API_ERROR_MESSAGE[code] : API_ERROR_MESSAGE.INTERNAL;
+/** 认不出的 `code` 兜底 `INTERNAL`（库里的 `error_code` 是 `TEXT`，类型上不保证是 `ErrorCode`）。 */
+export const errorMessageOf = (code: string): string =>
+  isErrorCode(code) ? ERROR_MESSAGE[code] : ERROR_MESSAGE.INTERNAL;
