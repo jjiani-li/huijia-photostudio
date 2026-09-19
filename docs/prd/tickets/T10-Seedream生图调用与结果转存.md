@@ -56,3 +56,12 @@ pnpm test && pnpm check:acceptance
 - **T11 的钩子**：`generate.ts` 的逐张循环里，转存后（`produced.push` 之前）留了注释块，写明 `moderateResult()`（硬闸门，`reject` 中止该张及后续张的转存、写 `content_reviews(stage='result')` 与 `moderation.reject`）与 `eraReview()`（软标注，回填 `era_check_json` / `age_delta`，失败留 `NULL` 并 warn）的调用位置。**未实现、未写 `content_reviews`**，`insertResult` 的 `era_check_json` / `age_delta` 恒 `NULL`。
 - **`ERR-01` / `ERR-05` 由本条补齐**（T09 只覆盖了 worker 机制的 `ERR-01` 口径，端到端复现留在本条）：用 `getArk()` 的 mock 单例 `setFailure(...)`，`ERR-01` 驱动 handler 两次（第一次 `queued`/`attempt=1`，第二次 `failed`/`PROVIDER_TIMEOUT`/`attempt=1`），`ERR-05` 一次即 `failed`/`PROVIDER_ERROR`/`attempt=0`（跑完还原 `setFailure(null)`）。为此 handler 的失败分支把 `mapArkError().retryable` 与 worker 的 `isAutoRetryable()`（零产出 + 瞬时码集合 + `attempt < 1`）**合并判定**——`ModelNotOpen` 落 `PROVIDER_ERROR` 但 §5.8 标注不可重试，只看错误码会把 `ERR-05` 变成 `attempt=1`。
 - **接受度脚本的配额**：T09 用例留下的预扣没有回滚，DEV_USER 默认额度（20）会被后续用例撞满，故 T10 用例段临时把 `daily_image_quota` 抬到 10000 并登记还原（与既有的 `usage_counters` 快照回滚同一套自带清理）。
+
+### 两轴评审收口（`/code-review`，Standards + Spec，基线 `f7b9988`）
+
+1. **循环导入**：`registry.ts` 一度 `import { settleJobFailure } from './worker'`，与 `worker → registry → handlers/generate → worker` 形成环。已把 `AUTO_RETRY_ERROR_CODES` / `AUTO_RETRY_MAX_ATTEMPT` / `isAutoRetryable` / `settleJobFailure` 从 `worker.ts` 拆到新文件 `src/jobs/settle.ts`，三处（worker / registry / generate）都从它导入；`spec/04` §2 代码树补 `settle`。环已断。
+2. **`generations.onTimeout` 的配额泄漏与竞态**：原实现无条件走 `settleJobFailure(produced: 0)`，其 `failed` 分支只写 `updateStatus('failed')`——**不回滚额度、不写 `generation_results` / `generation.finish`**（违反 `M06` §5.3/§5.6），且对已由 handler 自落终态的行会二次覆盖（handler 挂起被 abort 后仍可能完成并 finalize）。改为 `generate.ts` 导出 `failTimedOutGeneration(id)`：**只对仍 `running` 的行生效**；可重试 → `requeueForRetry`，否则 `commitTerminal`（终态 + 结果行 + 回滚 + `generation.finish` 同一事务）。`registry` 的 `onTimeout` 指向它。
+3. **零产出重试的漏网**：原先只有 `generateImage` / 读参考图**抛错**才会走 `attempt<1 → requeue`；逐张转存全部失败（`n=0`、`STORAGE_ERROR`）不会抛出到外层 catch，于是直接落 `failed`，漏掉 `spec/04` §4.6 的「零产出 + 瞬时码 → 重试一次」。已把重试判定移到逐张循环**之后**统一做：`produced.length === 0 && lastFailure.retryable && isAutoRetryable(...)` → `requeueForRetry`，两种失败来源共用同一判据。
+4. **契约分歧收在 `spec/`**：§4.6 的「错误码瞬时集合」与 `M06` §5.8 的逐条 `可重试` 列对 `ModelNotOpen`（落 `PROVIDER_ERROR`）互相矛盾，`ERR-05` 要求 `attempt=0`。已在 `spec/04-技术基线与目录结构.md` §4.6 写明「逐条可重试性以 `modules/M06-生成编排.md` §5.8 的 `可重试` 列为准，不一致时按该列收窄」，不再只留在 ticket 记录里。
+
+收口后复跑：`pnpm test` 217 全绿；`pnpm check` 零错误；`pnpm check:docs` 17 断言 / `pnpm test:docs` 50 用例全绿；`pnpm check:acceptance` 仍 **37 passed**（`E2E-05`–`E2E-08`、`CMP-01/03/04`、`ERR-01/05` 全绿）。

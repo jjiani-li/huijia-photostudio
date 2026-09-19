@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { ArkUpstreamError, getArk, mapArkError } from '../../server/ark';
-import { AppError, appError } from '../../server/domain/errors';
+import { AppError, ERROR_MESSAGE, appError } from '../../server/domain/errors';
 import { nowIso } from '../../server/domain/time';
 import { getDb } from '../../server/db/connection';
 import {
   claimForRun,
+  findById,
   insertResult,
   requeueForRetry,
   updateStatus,
@@ -19,7 +20,7 @@ import { AIGC_MARKER, markGeneratedImage } from '../../server/images/mark';
 import { probeImage } from '../../server/images/probe';
 import { audit } from '../../server/security/audit';
 import { buildKey, getStorage, type ImageExt } from '../../server/storage';
-import { AUTO_RETRY_ERROR_CODES, isAutoRetryable } from '../worker';
+import { AUTO_RETRY_ERROR_CODES, isAutoRetryable } from '../settle';
 import type { ErrorCode } from '../../shared/types';
 
 /**
@@ -109,6 +110,47 @@ interface Produced {
 }
 
 /**
+ * 写终态 + `generation_results` + 额度回滚 + `generation.finish` 审计，**四件事同一事务**
+ * （`M06` §5.3 / §5.6 / §5.9⑥）。额度日取**入队日**（`generations.created_at` 的 UTC 日期），跨天完成不打错行。
+ */
+const commitTerminal = (
+  generation: GenerationRecord,
+  produced: Produced[],
+  errorCode: ErrorCode,
+  errorMessage: string | null,
+  startedAt: string,
+): GenerationStatus => {
+  const n = produced.length;
+  const requested = generation.requestedCount;
+  const status: GenerationStatus = n === requested ? 'succeeded' : n > 0 ? 'partial' : 'failed';
+  const finishedAt = nowIso();
+  const generationDay = generation.createdAt.slice(0, 10);
+  getDb().transaction(() => {
+    for (const row of produced) {
+      insertResult({
+        generationId: generation.id,
+        photoId: row.photoId,
+        ordinal: row.ordinal,
+        seed: row.seed,
+        createdAt: finishedAt,
+      });
+    }
+    updateStatus({
+      id: generation.id,
+      status,
+      attempt: generation.attempt,
+      errorCode: status === 'succeeded' ? null : errorCode,
+      errorMessage: status === 'succeeded' ? null : errorMessage,
+      startedAt,
+      finishedAt,
+    });
+    rollback(generation.userId, generationDay, requested - n);
+    audit({ action: 'generation.finish', userId: generation.userId, target: `generation:${generation.id}` });
+  })();
+  return status;
+};
+
+/**
  * 单张的固定转存序列（`spec/06` §3.3）：下载 → 探宽高 → 写隐式标识 → 原子落盘 → 插 `photos`
  * → 写 `audit_logs(action='photo.mark')`。宽高一律取 `probeImage()` 的**实测值**，不得写请求的 `size`；
  * `photos.bytes` 取标识写入**之后**的长度（`E2E-06`）。
@@ -180,47 +222,22 @@ export const runGenerateJob = async (generation: GenerationRecord, signal?: Abor
   }
 
   const produced: Produced[] = [];
-  let lastFailure: { code: ErrorCode; raw: string } | null = null;
+  let lastFailure: { code: ErrorCode; raw: string; retryable: boolean } | null = null;
 
-  /** 终态判定 + 回滚未产出额度 + `generation.finish` 审计，全部在同一事务内（`M06` §5.3、§5.6）。 */
+  /** 终态判定 + 回滚未产出额度 + `generation_results` + `generation.finish`（同一事务，`M06` §5.3）。 */
   const finalize = (): void => {
-    const n = produced.length;
-    const requested = generation.requestedCount;
-    const status: GenerationStatus = n === requested ? 'succeeded' : n > 0 ? 'partial' : 'failed';
-    const errorCode = status === 'succeeded' ? null : (lastFailure?.code ?? 'PROVIDER_ERROR');
-    const errorMessage = status === 'succeeded' ? null : (lastFailure?.raw ?? null);
-    const finishedAt = nowIso();
-    // 额度日 = 入队日（`generations.created_at` 的 UTC 日期），跨天完成时不打错行。
-    const generationDay = generation.createdAt.slice(0, 10);
-
-    getDb().transaction(() => {
-      for (const row of produced) {
-        insertResult({
-          generationId: generation.id,
-          photoId: row.photoId,
-          ordinal: row.ordinal,
-          seed: row.seed,
-          createdAt: finishedAt,
-        });
-      }
-      updateStatus({
-        id: generation.id,
-        status,
-        attempt: generation.attempt,
-        errorCode,
-        errorMessage,
-        startedAt,
-        finishedAt,
-      });
-      rollback(generation.userId, generationDay, requested - n);
-      audit({ action: 'generation.finish', userId: generation.userId, target: `generation:${generation.id}` });
-    })();
-
+    const status = commitTerminal(
+      generation,
+      produced,
+      lastFailure?.code ?? 'PROVIDER_ERROR',
+      lastFailure?.raw ?? null,
+      startedAt,
+    );
     log('info', 'done', {
       generationId: generation.id,
       status,
-      produced: n,
-      requested,
+      produced: produced.length,
+      requested: generation.requestedCount,
       ms: Date.now() - startedAtMs,
     });
   };
@@ -250,40 +267,42 @@ export const runGenerateJob = async (generation: GenerationRecord, signal?: Abor
         // `content_reviews`（`tickets/T11` 拥有）。
         produced.push({ photoId, ordinal: produced.length, seed: item.seed });
       } catch (err) {
-        const failure = toFailure(err);
-        lastFailure = { code: failure.code, raw: failure.raw };
+        lastFailure = toFailure(err);
         log('warn', '转存失败，跳过该张', {
           generationId: generation.id,
           ordinal: index,
-          code: failure.code,
-          reason: failure.raw.slice(0, CONTENT_LOG_LIMIT),
+          code: lastFailure.code,
+          reason: lastFailure.raw.slice(0, CONTENT_LOG_LIMIT),
         });
       }
     }
   } catch (err) {
-    const failure = toFailure(err);
-    // 零产出 + 瞬时错误 + `attempt < 1` → 回 `queued`（`attempt + 1`），不回滚、不写终态与 finish 审计。
-    if (
-      failure.retryable &&
-      isAutoRetryable({ code: failure.code, attempt: generation.attempt, produced: produced.length })
-    ) {
-      requeueForRetry(generation.id, generation.attempt + 1, failure.code, failure.raw);
-      log('warn', 'auto retry scheduled', {
-        generationId: generation.id,
-        attempt: generation.attempt + 1,
-        code: failure.code,
-        reason: failure.raw.slice(0, CONTENT_LOG_LIMIT),
-      });
-      return;
-    }
-    lastFailure = { code: failure.code, raw: failure.raw };
+    lastFailure = toFailure(err);
     log('warn', 'generate failed', {
       generationId: generation.id,
-      code: failure.code,
+      code: lastFailure.code,
       produced: produced.length,
-      reason: failure.raw.slice(0, CONTENT_LOG_LIMIT),
+      reason: lastFailure.raw.slice(0, CONTENT_LOG_LIMIT),
       ms: Date.now() - startedAtMs,
     });
+  }
+
+  // 零产出 + 瞬时错误 + `attempt < 1` → 回 `queued`（`attempt + 1`），不回滚、不写终态与 finish 审计
+  // （`spec/04` §4.6）。上游调用失败与「逐张转存全部失败」走同一判据——后者不会抛出到上面的 catch。
+  if (
+    produced.length === 0 &&
+    lastFailure !== null &&
+    lastFailure.retryable &&
+    isAutoRetryable({ code: lastFailure.code, attempt: generation.attempt, produced: 0 })
+  ) {
+    requeueForRetry(generation.id, generation.attempt + 1, lastFailure.code, lastFailure.raw);
+    log('warn', 'auto retry scheduled', {
+      generationId: generation.id,
+      attempt: generation.attempt + 1,
+      code: lastFailure.code,
+      reason: lastFailure.raw.slice(0, CONTENT_LOG_LIMIT),
+    });
+    return;
   }
 
   try {
@@ -291,4 +310,19 @@ export const runGenerateJob = async (generation: GenerationRecord, signal?: Abor
   } catch (err) {
     log('error', '终态落库失败', { generationId: generation.id, error: describe(err) });
   }
+};
+
+/**
+ * `JOB_TIMEOUT_SECONDS` 兜底（`spec/04-技术基线与目录结构.md` §4.6）：worker 到点 abort 后由
+ * `registry` 调用。**只对仍处 `running` 的行生效**——handler 可能已自行落终态，无条件重写会覆盖结果；
+ * 失败态必须连同额度回滚与 `generation.finish` 审计，故不能走通用的 `settleJobFailure`。
+ */
+export const failTimedOutGeneration = (id: number): void => {
+  const record = findById(id);
+  if (record === null || record.status !== 'running') return;
+  if (isAutoRetryable({ code: 'PROVIDER_TIMEOUT', attempt: record.attempt, produced: 0 })) {
+    requeueForRetry(id, record.attempt + 1, 'PROVIDER_TIMEOUT', ERROR_MESSAGE.PROVIDER_TIMEOUT);
+    return;
+  }
+  commitTerminal(record, [], 'PROVIDER_TIMEOUT', ERROR_MESSAGE.PROVIDER_TIMEOUT, record.startedAt ?? nowIso());
 };

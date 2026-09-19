@@ -20,7 +20,8 @@ import {
 import { nowIso } from '../server/domain/time';
 import type { ErrorCode } from '../shared/types';
 import type { JobHandler, JobHandlerMap, TaskSource } from './registry';
-import { isAutoRetryable, processOne, reclaimStale, settleJobFailure } from './worker';
+import { isAutoRetryable, settleJobFailure } from './settle';
+import { processOne, reclaimStale } from './worker';
 
 /**
  * worker 机制的单测（`docs/prd/spec/04-技术基线与目录结构.md` §4.6 是唯一事实源）：

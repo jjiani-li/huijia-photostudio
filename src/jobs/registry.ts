@@ -7,8 +7,7 @@ import { findNextQueuedId as findNextReverseJobId } from '../server/db/repositor
 import { ERROR_MESSAGE } from '../server/domain/errors';
 import { nowIso } from '../server/domain/time';
 import { anchorExtractHandler } from './handlers/anchorExtract';
-import { runGenerateJob } from './handlers/generate';
-import { settleJobFailure } from './worker';
+import { failTimedOutGeneration, runGenerateJob } from './handlers/generate';
 
 /**
  * 任务类型 → handler 的映射，以及 worker 的三张任务表轮转来源
@@ -69,19 +68,7 @@ export const TASK_SOURCES: TaskSource[] = [
   {
     jobType: 'generate',
     findNextQueuedId: findNextGenerationId,
-    // 超时兜底：走与 handler 失败分支同一套判据（可重试 → 回 queued，否则落 failed），
-    // 否则被打断的生成会永远停在 `running`（`tickets/T10`）。
-    onTimeout: (id) => {
-      const record = findGenerationById(id);
-      if (record === null) return;
-      settleJobFailure({
-        table: 'generations',
-        id,
-        attempt: record.attempt,
-        produced: 0,
-        code: 'PROVIDER_TIMEOUT',
-        rawMessage: ERROR_MESSAGE.PROVIDER_TIMEOUT,
-      });
-    },
+    // 超时兜底：仅对仍 `running` 的行生效，失败态连同额度回滚与 generation.finish（`tickets/T10`）。
+    onTimeout: failTimedOutGeneration,
   },
 ];

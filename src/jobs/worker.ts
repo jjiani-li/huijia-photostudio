@@ -1,4 +1,3 @@
-import type { ErrorCode } from '../shared/types';
 import { isMain } from '../server/db/cli';
 import * as anchorsRepo from '../server/db/repositories/anchors';
 import * as generationsRepo from '../server/db/repositories/generations';
@@ -20,8 +19,7 @@ import {
  * - **心跳**：`setInterval(5_000)` 写 `worker-heartbeat`，等待任务时也不停；
  * - **启动回收**：进程启动后对三张任务表各跑一次 `requeueStale`（`ERR-02`）；
  * - **超时**：handler 用 `JOB_TIMEOUT_SECONDS` 的竞速包裹，到点按 `PROVIDER_TIMEOUT` 处理；
- * - **自动重试**：`settleJobFailure` 是「零产出 + 瞬时错误 + `attempt < 1` → 回 `queued` 且 `attempt+1`，
- *   否则落 `failed`」的唯一实现，由各表 handler 在失败分支调用（`tickets/T10` / `tickets/T18`）。
+ * - **自动重试**：判据与写入在 `src/jobs/settle.ts`（避免与 `registry` 形成循环导入）。
  *
  * 本期 `WORKER_CONCURRENCY` 恒按 1 串行执行（不引入多 worker / 通用任务队列，§5）。
  */
@@ -32,16 +30,6 @@ export const WORKER_DEFAULTS = {
   concurrency: 1,
   jobTimeoutSeconds: 120,
 } as const;
-
-/** 自动重试的瞬时错误集合（§4.6；`SQLITE_BUSY` 已映射为 `STORAGE_ERROR`）。 */
-export const AUTO_RETRY_ERROR_CODES: ReadonlySet<ErrorCode> = new Set([
-  'PROVIDER_TIMEOUT',
-  'PROVIDER_ERROR',
-  'STORAGE_ERROR',
-]);
-
-/** `attempt` 达到该值后不再自动重试（只重试一次，§4.6）。 */
-export const AUTO_RETRY_MAX_ATTEMPT = 1;
 
 const log = (level: 'info' | 'warn' | 'error', msg: string, extra: Record<string, unknown> = {}): void => {
   const line = JSON.stringify({ level, scope: 'worker', msg, ...extra, at: nowIso() });
@@ -70,80 +58,6 @@ export const reclaimStale = (
     promptReverseJobs: reverseJobsRepo.requeueStale(beforeIso),
     generations: generationsRepo.requeueStale(beforeIso),
   };
-};
-
-// ── 自动重试（§4.6）：三张表同一套判据与同一套状态写入 ──────────────────────────────────
-
-export type JobTable = 'identity_anchors' | 'prompt_reverse_jobs' | 'generations';
-
-export interface JobFailureInput {
-  table: JobTable;
-  id: number;
-  attempt: number;
-  /** 本次成功转存并落库的结果数；`> 0` 时不得自动重试。 */
-  produced: number;
-  code: ErrorCode;
-  /** 上游原文：只落库供排查，响应里的 `error.message` 一律取文案表（`spec/04` §4.1）。 */
-  rawMessage: string;
-}
-
-/** 判据：零产出 + 错误码在瞬时集合内 + `attempt < 1`。 */
-export const isAutoRetryable = (input: { code: ErrorCode; attempt: number; produced: number }): boolean =>
-  input.produced === 0 && input.attempt < AUTO_RETRY_MAX_ATTEMPT && AUTO_RETRY_ERROR_CODES.has(input.code);
-
-/** 三张表各自的失败写入（SQL 全部落在 repository 层）。 */
-interface SettleOps {
-  requeueForRetry(input: { id: number; attempt: number; code: ErrorCode; raw: string }): void;
-  markFailed(input: { id: number; attempt: number; code: ErrorCode; raw: string; at: string }): void;
-}
-
-const SETTLE_OPS: Record<JobTable, SettleOps> = {
-  identity_anchors: {
-    requeueForRetry: ({ id, attempt, code, raw }) => anchorsRepo.requeueForRetry(id, attempt, code, raw),
-    markFailed: ({ id, code, raw, at }) =>
-      anchorsRepo.markFailed({ id, errorCode: code, errorMessage: raw, quality: null, finishedAt: at }),
-  },
-  prompt_reverse_jobs: {
-    requeueForRetry: ({ id, attempt, code, raw }) => reverseJobsRepo.requeueForRetry(id, attempt, code, raw),
-    markFailed: ({ id, code, raw, at }) => reverseJobsRepo.markTerminalFailure(id, code, raw, at),
-  },
-  generations: {
-    requeueForRetry: ({ id, attempt, code, raw }) =>
-      generationsRepo.updateStatus({
-        id,
-        status: 'queued',
-        attempt,
-        errorCode: code,
-        errorMessage: raw,
-        startedAt: null,
-        finishedAt: null,
-      }),
-    markFailed: ({ id, attempt, code, raw, at }) =>
-      generationsRepo.updateStatus({
-        id,
-        status: 'failed',
-        attempt,
-        errorCode: code,
-        errorMessage: raw,
-        startedAt: null,
-        finishedAt: at,
-      }),
-  },
-};
-
-/**
- * 失败处置的唯一入口：可重试 → 置回 `queued` 且 `attempt + 1`（`attempt` 只在重试时自增，
- * claim 阶段不动）；否则落终态 `failed`（`attempt` 保持不变）。供各表 handler 的失败分支调用
- * （`tickets/T10` / `tickets/T18`）。
- */
-export const settleJobFailure = (input: JobFailureInput): 'requeued' | 'failed' => {
-  const ops = SETTLE_OPS[input.table];
-  if (isAutoRetryable(input)) {
-    ops.requeueForRetry({ id: input.id, attempt: input.attempt + 1, code: input.code, raw: input.rawMessage });
-    return 'requeued';
-  }
-  ops.markFailed({ id: input.id, attempt: input.attempt, code: input.code, raw: input.rawMessage, at: nowIso() });
-  return 'failed';
 };
 
 // ── 单格处理：取一行 → 跑 handler（带超时竞速）────────────────────────────────────────
