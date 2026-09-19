@@ -8,7 +8,7 @@ import { runSeed } from '../db/seed';
 import { resetStorage } from '../storage';
 import { insertPhoto } from '../db/repositories/photos';
 import { insert as insertAnchor } from '../db/repositories/anchors';
-import { insert as insertGeneration, insertResult } from '../db/repositories/generations';
+import { insert as insertGeneration, insertResult, listResultsByGeneration } from '../db/repositories/generations';
 import { insert as insertReverseJob } from '../db/repositories/promptReverseJobs';
 import { ensureActive } from '../db/repositories/consents';
 import { nowIso } from './time';
@@ -168,10 +168,10 @@ describe('deletePhoto · original 目标（§3.3 规则表首行）', () => {
 });
 
 describe('deletePhoto · preprocessed 目标', () => {
-  it('只软删该行 + 受影响 generations 的 generated 图；原图不动', () => {
+  it('只软删该行 + 受影响 generations 的 generated 图；原图不动；preprocessed 计数含目标自身', () => {
     const chain = makeChain();
     const result = deletePhoto({ userId: USER, photoId: chain.preprocessed });
-    expect(result.cascaded).toEqual({ preprocessed: 0, anchors: 1, generations: 1, results: 1 });
+    expect(result.cascaded).toEqual({ preprocessed: 1, anchors: 1, generations: 1, results: 1 });
     expect(photoKind(chain.preprocessed).deleted_at).not.toBeNull();
     expect(photoKind(chain.generated).deleted_at).not.toBeNull();
     expect(photoKind(chain.original).deleted_at).toBeNull();
@@ -186,6 +186,13 @@ describe('deletePhoto · generated 目标', () => {
     expect(photoKind(chain.generated).deleted_at).not.toBeNull();
     expect(rowCount('SELECT COUNT(*) AS n FROM identity_anchors WHERE id = ?', chain.anchorId)).toBe(1);
     expect(rowCount('SELECT COUNT(*) AS n FROM generation_results WHERE id = ?', chain.resultId)).toBe(1);
+  });
+
+  it('软删后该结果不再出现在结果列表（spec/03 §3.6「只返回未软删除的照片」）', () => {
+    const chain = makeChain();
+    expect(listResultsByGeneration(chain.generationId)).toHaveLength(1);
+    deletePhoto({ userId: USER, photoId: chain.generated });
+    expect(listResultsByGeneration(chain.generationId)).toHaveLength(0);
   });
 });
 
@@ -202,10 +209,17 @@ describe('deleteAnchor · §3.3 规则', () => {
     expect(rowCount("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'anchor.delete'")).toBe(before + 1);
   });
 
-  it('不存在 / 他人锚点 → 404 ANCHOR_NOT_FOUND', () => {
+  it('不存在 / 已删除的锚点 → 404 ANCHOR_NOT_FOUND', () => {
     const chain = makeChain();
     expect(() => deleteAnchor({ userId: OTHER, anchorId: chain.anchorId })).toThrowError(
       expect.objectContaining({ code: 'ANCHOR_NOT_FOUND' }),
     );
+  });
+
+  it('幂等：重复删除返回 200 且 cascaded 全零（M04 §5.4、spec/03 §1.5）', () => {
+    const chain = makeChain();
+    deleteAnchor({ userId: USER, anchorId: chain.anchorId });
+    const again = deleteAnchor({ userId: USER, anchorId: chain.anchorId });
+    expect(again).toEqual({ ok: true, cascaded: { generations: 0, results: 0 } });
   });
 });

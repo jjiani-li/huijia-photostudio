@@ -43,7 +43,7 @@ export const cascadeFromAnchor = (userId: number, anchorId: number, at: Iso): An
   consents.revokeByAnchor(anchorId, at);
   generations.deleteResultsByGenerationIds(generationIds);
   generations.hardDeleteGenerations(generationIds);
-  reverseJobs.hardDeleteBySourcePhotos(userId, generatedPhotoIds);
+  reverseJobs.hardDeleteBySourcePhotos(generatedPhotoIds, userId);
   return { generations: generationIds.length, results };
 };
 
@@ -67,10 +67,14 @@ export const deletePhoto = (params: {
     const at = nowIso();
 
     // ① 目标照片；`original` 还软删它派生的预处理图（`preprocessed` / `generated` 各自只软删自己）。
+    // `cascaded.preprocessed` = 被标记的 `kind='preprocessed'` 行数（`modules/M08` §5.2）：
+    // `original` 目标是派生图、`preprocessed` 目标是它自身（`generated` 目标不含预处理图）。
     const preprocessedIds =
       target.kind === 'original' ? photos.listPreprocessedIdsBySource(target.id) : [];
-    const preprocessed = photos.softDeletePhotos(preprocessedIds, at);
-    photos.softDeletePhoto(target.id, at);
+    const targetMarked = photos.softDeletePhoto(target.id, at);
+    const preprocessed =
+      (target.kind === 'original' ? photos.softDeletePhotos(preprocessedIds, at) : 0) +
+      (target.kind === 'preprocessed' ? targetMarked : 0);
 
     // ②③④ 受影响锚点 → generations → generated 照片：每个锚点走同一段级联（`generated` 目标不触发）。
     const anchorIds =
@@ -87,7 +91,7 @@ export const deletePhoto = (params: {
     anchors.hardDeleteAnchors(anchorIds);
 
     // ⑤ 受影响反推任务（`source_photo_id` + `user_id` 级联，`spec/01` §3.15）。
-    reverseJobs.hardDeleteBySourcePhotos(params.userId, [target.id, ...preprocessedIds]);
+    reverseJobs.hardDeleteBySourcePhotos([target.id, ...preprocessedIds], params.userId);
 
     audit({ action: 'photo.delete', userId: params.userId, target: `photo:${target.id}` }, at);
     for (const anchorId of anchorIds) {
@@ -102,17 +106,23 @@ export const deletePhoto = (params: {
 };
 
 /**
- * `DELETE /api/anchors/:id`（`spec/03-接口契约.md` §3.3）：幂等物理删该锚点行 + 级联（`cascadeFromAnchor`）
- * + 写 `anchor.delete` 审计。不存在 / 他人 / 已删除 → `404 ANCHOR_NOT_FOUND`（不返回 403，`API-04`）。
+ * `DELETE /api/anchors/:id`（`spec/03-接口契约.md` §3.3、`modules/M04-身份确认与授权.md` §5.4）：
+ * 幂等物理删该锚点行 + 级联（`cascadeFromAnchor`）+ 写 `anchor.delete` 审计。
+ * 行已物理删除 → `200` 且 `cascaded` 全零（`spec/03` §1.5）；行存在但属于其他用户 → `404 ANCHOR_NOT_FOUND`。
  */
 export const deleteAnchor = (params: {
   userId: number;
   anchorId: number;
 }): { ok: true; cascaded: AnchorCascaded } => {
+  const ZERO: AnchorCascaded = { generations: 0, results: 0 };
   return getDb()
     .transaction(() => {
       const existing = anchors.findByIdForUser(params.userId, params.anchorId);
-      if (existing === null) throw appError('ANCHOR_NOT_FOUND');
+      if (existing === null) {
+        // 已删除 → 200 幂等；存在（但属他人）→ 404（`API-04`）。
+        if (anchors.findById(params.anchorId) !== null) throw appError('ANCHOR_NOT_FOUND');
+        return { ok: true as const, cascaded: ZERO };
+      }
       const at = nowIso();
       const cascaded = cascadeFromAnchor(params.userId, params.anchorId, at);
       anchors.hardDeleteAnchor(params.anchorId, params.userId);

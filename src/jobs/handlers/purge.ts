@@ -65,7 +65,7 @@ export async function runPurge(now?: string): Promise<PurgeResult> {
       const ids = purgeable.map((photo) => photo.id);
       const deletedResults = getDb().transaction(() => {
         const orphans = generations.deleteOrphanResults();
-        reverseJobs.hardDeleteBySourcePhotoIds(ids);
+        reverseJobs.hardDeleteBySourcePhotos(ids);
         photos.hardDeletePhotos(ids);
         for (const photo of purgeable) {
           audit(

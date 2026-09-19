@@ -1,4 +1,5 @@
 import { getDb } from '../connection';
+import { placeholders } from '../sql';
 import { idArrayJson, parseJsonColumn, parseRequiredJsonColumn } from '../json';
 import {
   anchorFeaturesSchema,
@@ -339,7 +340,7 @@ export const hardDeleteAnchors = (ids: number[]): number => {
   return db.transaction(
     () =>
       db
-        .prepare(`DELETE FROM identity_anchors WHERE id IN (${new Array(ids.length).fill('?').join(', ')})`)
+        .prepare(`DELETE FROM identity_anchors WHERE id IN (${placeholders(ids.length)})`)
         .run(...ids).changes,
   )();
 };

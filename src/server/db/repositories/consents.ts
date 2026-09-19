@@ -93,21 +93,6 @@ export const revokeByAnchor = (anchorId: number, revokedAt: Iso): void => {
     )();
 };
 
-/** 批量吊销（`DELETE /api/photos/:id` 命中多个锚点时，`modules/M08` §3.3），返回命中行数。 */
-export const revokeByAnchorIds = (anchorIds: number[], revokedAt: Iso): number => {
-  if (anchorIds.length === 0) return 0;
-  const db = getDb();
-  return db.transaction(
-    () =>
-      db
-        .prepare(
-          `UPDATE consents SET revoked_at = ?
-           WHERE anchor_id IN (${new Array(anchorIds.length).fill('?').join(', ')}) AND revoked_at IS NULL`,
-        )
-        .run(revokedAt, ...anchorIds).changes,
-  )();
-};
-
 /**
  * 吊销某用户某 `scope` 的全部有效行（`docs/prd/modules/M04-身份确认与授权.md` §5.5）：
  * 不删行、不改 `agreed_at`，只写 `revoked_at`；返回被吊销的行数。

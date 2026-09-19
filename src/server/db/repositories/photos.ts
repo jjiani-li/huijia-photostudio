@@ -1,4 +1,5 @@
 import { getDb } from '../connection';
+import { placeholders } from '../sql';
 import { parseJsonColumn } from '../json';
 import { nowIso } from '../../domain/time';
 import { qualitySchema, type Iso, type PhotoKind, type Quality } from '../../../shared/types';
@@ -209,12 +210,11 @@ export const updateQualityJson = (id: number, quality: Quality): void => {
 
 export const listActivePhotosByIds = (userId: number, ids: number[]): PhotoRecord[] => {
   if (ids.length === 0) return [];
-  const placeholders = ids.map(() => '?').join(', ');
   return (
     getDb()
       .prepare(
         `SELECT ${COLUMNS} FROM photos
-         WHERE user_id = ? AND deleted_at IS NULL AND id IN (${placeholders})
+         WHERE user_id = ? AND deleted_at IS NULL AND id IN (${placeholders(ids.length)})
          ORDER BY created_at DESC, id DESC`,
       )
       .all(userId, ...ids) as PhotoRow[]
@@ -273,8 +273,6 @@ export const hardDeletePhoto = (id: number): number => {
 };
 
 // ── `tickets/T13`：级联软删、历史互补查询与物理清理的批量 SQL ─────────────────────────
-
-const placeholders = (count: number): string => new Array(count).fill('?').join(', ');
 
 /** 不限归属的按 id 读（`DELETE /api/photos/:id` 区分「他人资源 404」与「已物理清理 200」用）。 */
 export const findPhotoById = (id: number): PhotoRecord | null => {

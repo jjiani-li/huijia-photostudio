@@ -443,10 +443,11 @@ describe('DELETE /api/anchors/:id', () => {
     expect(rows.every((r) => r.revoked_at !== null)).toBe(true);
   });
 
-  it('不存在 / 已删除的锚点 → 404 ANCHOR_NOT_FOUND', async () => {
-    const res = await deleteAnchorReq(999999);
-    expect(res.status).toBe(404);
-    expect(await errorCode(res)).toBe('ANCHOR_NOT_FOUND');
+  it('已删除 / 不存在的锚点 → 200 幂等（cascaded 全零，M04 §5.4）', async () => {
+    // 幂等：目标行已物理删除 → 200 全零（`modules/M04-身份确认与授权.md` §5.4、`spec/03-接口契约.md` §1.5）。
+    const gone = await deleteAnchorReq(999999);
+    expect(gone.status).toBe(200);
+    expect(await gone.json()).toEqual({ ok: true, cascaded: { generations: 0, results: 0 } });
   });
 
   it('他人锚点 → 404 ANCHOR_NOT_FOUND（不返回 403）', async () => {

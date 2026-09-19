@@ -1,4 +1,5 @@
 import { getDb } from '../connection';
+import { placeholders } from '../sql';
 import { idArrayJson, parseJsonColumn, parseRequiredJsonColumn } from '../json';
 import {
   eraCheckSchema,
@@ -287,14 +288,16 @@ const toResult = (row: GenerationResultRow): GenerationResultRecord => ({
   createdAt: row.created_at,
 });
 
-/** `ordinal` 升序；宽高取转存后实测的 `photos.width` / `photos.height`（`modules/M06` §5.9 ③）。 */
+/** `ordinal` 升序；宽高取转存后实测的 `photos.width` / `photos.height`（`modules/M06` §5.9 ③）。
+ *  `p.deleted_at IS NULL`：单张 `kind='generated'` 被软删后（`modules/M08` §3.3 的 `generated` 行
+ *  「结果行保留」），历史 / 详情不得再返回指向 404 的结果（`spec/03-接口契约.md` §3.6「只返回未软删除的照片」）。 */
 export const listResultsByGeneration = (generationId: number): GenerationResultRecord[] =>
   (
     getDb()
       .prepare(
         `SELECT ${RESULT_COLUMNS} FROM generation_results r
          JOIN photos p ON p.id = r.photo_id
-         WHERE r.generation_id = ?
+         WHERE r.generation_id = ? AND p.deleted_at IS NULL
          ORDER BY r.ordinal ASC`,
       )
       .all(generationId) as GenerationResultRow[]
@@ -350,8 +353,6 @@ export const requeueForRetry = (id: number, attempt: number, errorCode: string, 
 };
 
 // ── `tickets/T13`：历史分页、级联解析与反馈写入的批量 SQL ─────────────────────────────
-
-const placeholders = (count: number): string => new Array(count).fill('?').join(', ');
 
 /** 受影响 `generations` id（`modules/M08` §3.3 第 ③ 步：`anchor_id IN (:anchorIds)`）。 */
 export const listIdsByAnchorIds = (anchorIds: number[]): number[] => {
