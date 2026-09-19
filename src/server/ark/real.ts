@@ -5,6 +5,10 @@ import type {
   ArkImageRequest,
   ArkImageResult,
   ArkProvider,
+  EraReviewInput,
+  EraReviewResult,
+  SafetyReviewInput,
+  SafetyReviewResult,
 } from './types';
 
 /**
@@ -17,6 +21,8 @@ export const arkVisionModel = (): string =>
   process.env.ARK_VISION_MODEL ?? 'doubao-seed-2-1-turbo-260628';
 /** 读图请求的 `max_tokens`（`docs/prd/modules/M03-身份锚点提取.md` §7 的代码内常量）。 */
 export const ANCHOR_MAX_TOKENS = 1200;
+/** 复核 / 审核请求的 `max_tokens`（`modules/M07-生成后复核与内容审核.md` §7 的代码内常量）。 */
+export const REVIEW_MAX_TOKENS = 800;
 /** 生图模型名（`generations.model` 与 `images/generations` 的 `model` 取同一份，避免第二份默认值）。 */
 export const arkImageModel = (): string =>
   process.env.ARK_IMAGE_MODEL ?? 'doubao-seedream-5-0-lite-260128';
@@ -127,5 +133,52 @@ export class RealArkProvider implements ArkProvider {
       throw new ArkUpstreamError({ kind: 'http', errorCode: 'EmptyData', message: 'images/generations 未返回图片' });
     }
     return { images, model: data.model ?? arkImageModel() };
+  }
+
+  /**
+   * `chat/completions` 的审核调用（`modules/M07` §5.6）：`upload` / `result` 送图，`prompt` 送文本。
+   * 三段都应「对着真实内容」，因此不接受空输入（调用方保证 `image` / `text` 之一非空）。
+   */
+  async reviewSafety(input: SafetyReviewInput): Promise<SafetyReviewResult> {
+    const content: Array<Record<string, unknown>> = [
+      { type: 'text', text: input.text ?? '请判断这张图片是否包含违规内容。' },
+    ];
+    if (input.image !== null) content.push({ type: 'image_url', image_url: { url: input.image } });
+    const data = (await postJson('/chat/completions', {
+      model: arkVisionModel(),
+      max_tokens: REVIEW_MAX_TOKENS,
+      messages: [
+        { role: 'system', content: input.systemPrompt },
+        { role: 'user', content },
+      ],
+    })) as ChatResponse;
+    const text = data.choices?.[0]?.message?.content;
+    if (typeof text !== 'string') {
+      throw new ArkUpstreamError({ kind: 'http', errorCode: 'EmptyData', message: 'chat/completions 未返回 content' });
+    }
+    return { raw: text, model: arkVisionModel() };
+  }
+
+  /** 年代穿帮复核调用（`modules/M07` §5.2）：`messages` 组装与读图一致，正文原文原样返回。 */
+  async reviewEra(input: EraReviewInput): Promise<EraReviewResult> {
+    const data = (await postJson('/chat/completions', {
+      model: arkVisionModel(),
+      max_tokens: REVIEW_MAX_TOKENS,
+      messages: [
+        { role: 'system', content: input.systemPrompt },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: '请按系统提示复核这张生成图。' },
+            { type: 'image_url', image_url: { url: input.image } },
+          ],
+        },
+      ],
+    })) as ChatResponse;
+    const text = data.choices?.[0]?.message?.content;
+    if (typeof text !== 'string') {
+      throw new ArkUpstreamError({ kind: 'http', errorCode: 'EmptyData', message: 'chat/completions 未返回 content' });
+    }
+    return { raw: text, model: arkVisionModel() };
   }
 }

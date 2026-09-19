@@ -10,6 +10,7 @@ import { getDb } from '../db/connection';
 import { arkImageModel } from '../ark';
 import { buildPrompt } from '../prompt/build';
 import { audit } from '../security/audit';
+import { moderatePrompt } from '../security/moderation';
 import { assertQuotaAvailable } from '../security/quota';
 import { dayKey, nowIso } from './time';
 import { appError, ERROR_MESSAGE } from './errors';
@@ -85,9 +86,12 @@ const insertDraft = (
  * - 第 1–7 步在事务**之外**先跑（快速失败、不产生写操作）；
  * - 第 8 步的排他检查在事务**内、`INSERT` 之前**执行（否则刚插入的 `queued` 行会把自己数进去，
  *   每次首次生成都误报 `GENERATION_IN_PROGRESS`）；
- * - 事务用 `db.transaction(...).immediate()`（`BEGIN IMMEDIATE`），与 `pnpm worker` 抢同一把写锁。
+ * - 事务用 `db.transaction(...).immediate()`（`BEGIN IMMEDIATE`），与 `pnpm worker` 抢同一把写锁；
+ * - **prompt 阶段内容审核**（`modules/M07` §5.6）在拼装完成、入队之前，是本序列之外的一步
+ *   （不入 §5.1 的 8 步、不产生 `generations` 行、不预扣额度）：判定为 `reject` → `422 CONTENT_REJECTED`。
+ *   审核调用是异步的，故本函数为 `async`。
  */
-export const createGeneration = (input: CreateGenerationInput): GenerationRecord => {
+export const createGeneration = async (input: CreateGenerationInput): Promise<GenerationRecord> => {
   // ① 实名门槛（最先，未实名时不进入后续校验、不产生任何写操作；`RN-01`）。用户不存在同样视为不可用。
   const user = users.findById(input.userId);
   if (user === null || user.verifiedAt === null) throw appError('REALNAME_REQUIRED');
@@ -115,6 +119,11 @@ export const createGeneration = (input: CreateGenerationInput): GenerationRecord
     profile,
   });
 
+  // ⑤′ prompt 阶段内容审核（`modules/M07` §5.6）：拼装完成、入队之前；`reject` 即中止，不产生行、不预扣额度。
+  // 本期真正能拦到的只有"模型从照片里读到的违规文字"间接进入 prompt，是防线不是主力（`spec/06` §7）。
+  const moderationVerdict = await moderatePrompt({ userId: input.userId, prompt: draft.prompt });
+  if (moderationVerdict === 'reject') throw appError('CONTENT_REJECTED');
+
   // ⑦ 额度预检（失败时不得留下 `generations` 行，`SEC-04`）——必须在任何写操作之前，且排在锚点可用性之后。
   assertQuotaAvailable(input.userId, input.count);
 
@@ -141,7 +150,10 @@ export const createGeneration = (input: CreateGenerationInput): GenerationRecord
  * `succeeded` / `partial` / `failed`；语义是**新建 `generations` 行**，不更新旧行（`E2E-09`）。
  * prompt 由 `createGeneration` **重新拼装**（配置包可能已升级），不复制旧行。
  */
-export const retryGeneration = (input: { userId: number; generationId: number }): GenerationRecord => {
+export const retryGeneration = async (input: {
+  userId: number;
+  generationId: number;
+}): Promise<GenerationRecord> => {
   const existing = generations.findByIdForUser(input.userId, input.generationId);
   if (existing === null) throw appError('NOT_FOUND');
   if (existing.status === 'queued' || existing.status === 'running') {

@@ -222,76 +222,102 @@ beforeEach(() => {
   getDb().prepare('DELETE FROM usage_counters').run();
 });
 
-const create = (anchorId: number, count = 2, over: Partial<{ userId: number; eraCode: string; sceneId: number }> = {}) =>
-  createGeneration({ userId: 1, anchorId, eraCode: 'E2', sceneId: 1, count, ...over });
+const create = async (
+  anchorId: number,
+  count = 2,
+  over: Partial<{ userId: number; eraCode: string; sceneId: number }> = {},
+) => createGeneration({ userId: 1, anchorId, eraCode: 'E2', sceneId: 1, count, ...over });
+
+/** `createGeneration` / `retryGeneration` 现为 `async`（prompt 阶段审核要 await 上游），用异步版捕获错误码。 */
+const createCode = async (
+  anchorId: number,
+  count = 2,
+  over: Partial<{ userId: number; eraCode: string; sceneId: number }> = {},
+): Promise<string> => {
+  try {
+    await create(anchorId, count, over);
+    return 'NO_THROW';
+  } catch (err) {
+    return err instanceof AppError ? err.code : `NON_APP_ERROR:${String(err)}`;
+  }
+};
+
+const retryCode = async (input: { userId: number; generationId: number }): Promise<string> => {
+  try {
+    await retryGeneration(input);
+    return 'NO_THROW';
+  } catch (err) {
+    return err instanceof AppError ? err.code : `NON_APP_ERROR:${String(err)}`;
+  }
+};
 
 describe('createGeneration 的 8 步校验序列（modules/M06 §5.1，顺序即契约）', () => {
-  it('第 1 步先于第 5 步：未实名 → REALNAME_REQUIRED（锚点此时也未确认）', () => {
+  it('第 1 步先于第 5 步：未实名 → REALNAME_REQUIRED（锚点此时也未确认）', async () => {
     const id = makeAnchor();
     getDb().prepare('UPDATE users SET verified_at = NULL WHERE id = 1').run();
     try {
-      expect(codeOf(() => create(id))).toBe('REALNAME_REQUIRED');
+      expect(await createCode(id)).toBe('REALNAME_REQUIRED');
     } finally {
       getDb().prepare('UPDATE users SET verified_at = ? WHERE id = 1').run('2026-01-01T00:00:00Z');
     }
   });
 
-  it('第 2 步：count ∉ {2,3,4} → INVALID_PARAM', () => {
+  it('第 2 步：count ∉ {2,3,4} → INVALID_PARAM', async () => {
     const id = readyAnchor();
-    expect(codeOf(() => create(id, 1))).toBe('INVALID_PARAM');
-    expect(codeOf(() => create(id, 5))).toBe('INVALID_PARAM');
+    expect(await createCode(id, 1)).toBe('INVALID_PARAM');
+    expect(await createCode(id, 5)).toBe('INVALID_PARAM');
   });
 
-  it('第 3 步：eraCode / sceneId 不存在或未启用 → INVALID_PARAM', () => {
+  it('第 3 步：eraCode / sceneId 不存在或未启用 → INVALID_PARAM', async () => {
     const id = readyAnchor();
-    expect(codeOf(() => create(id, 2, { eraCode: 'E9' }))).toBe('INVALID_PARAM');
-    expect(codeOf(() => create(id, 2, { sceneId: 999 }))).toBe('INVALID_PARAM');
+    expect(await createCode(id, 2, { eraCode: 'E9' })).toBe('INVALID_PARAM');
+    expect(await createCode(id, 2, { sceneId: 999 })).toBe('INVALID_PARAM');
   });
 
-  it('第 4 步失败时不报第 5 步：他人锚点（且未确认）→ ANCHOR_NOT_FOUND', () => {
+  it('第 4 步失败时不报第 5 步：他人锚点（且未确认）→ ANCHOR_NOT_FOUND', async () => {
     const id = readyAnchor({ status: 'failed' });
     getDb().prepare('UPDATE identity_anchors SET user_id = 2 WHERE id = ?').run(id);
-    expect(codeOf(() => create(id))).toBe('ANCHOR_NOT_FOUND');
+    expect(await createCode(id)).toBe('ANCHOR_NOT_FOUND');
   });
 
-  it('第 5 步：status != succeeded / confirmed_by_user != 1 → ANCHOR_NOT_CONFIRMED', () => {
+  it('第 5 步：status != succeeded / confirmed_by_user != 1 → ANCHOR_NOT_CONFIRMED', async () => {
     const failed = readyAnchor({ status: 'failed' });
-    expect(codeOf(() => create(failed))).toBe('ANCHOR_NOT_CONFIRMED');
+    expect(await createCode(failed)).toBe('ANCHOR_NOT_CONFIRMED');
     const unconfirmed = makeAnchor();
-    expect(codeOf(() => create(unconfirmed))).toBe('ANCHOR_NOT_CONFIRMED');
+    expect(await createCode(unconfirmed)).toBe('ANCHOR_NOT_CONFIRMED');
   });
 
-  it('anchor_text 为空（不变量被破坏）→ ANCHOR_NOT_CONFIRMED，不产生 generations 行', () => {
+  it('anchor_text 为空（不变量被破坏）→ ANCHOR_NOT_CONFIRMED，不产生 generations 行', async () => {
     const id = readyAnchor();
     setAnchorText(id, null);
     const before = generationCount();
-    expect(codeOf(() => create(id))).toBe('ANCHOR_NOT_CONFIRMED');
+    expect(await createCode(id)).toBe('ANCHOR_NOT_CONFIRMED');
     expect(generationCount()).toBe(before);
   });
 
-  it('第 5 步（anchor_text 空）先于第 7 步：额度同样不足时报 ANCHOR_NOT_CONFIRMED，不报 QUOTA_EXCEEDED', () => {
+  it('第 5 步（anchor_text 空）先于第 7 步：额度同样不足时报 ANCHOR_NOT_CONFIRMED，不报 QUOTA_EXCEEDED', async () => {
     const id = readyAnchor();
     setAnchorText(id, null);
     getDb().prepare('UPDATE users SET daily_image_quota = 1 WHERE id = 1').run();
     try {
-      expect(codeOf(() => create(id, 2))).toBe('ANCHOR_NOT_CONFIRMED');
+      expect(await createCode(id, 2)).toBe('ANCHOR_NOT_CONFIRMED');
     } finally {
       getDb().prepare('UPDATE users SET daily_image_quota = 20 WHERE id = 1').run();
     }
   });
 
-  it('第 6 步：photo_usage 不存在或已吊销 → CONSENT_REQUIRED', () => {
+  it('第 6 步：photo_usage 不存在或已吊销 → CONSENT_REQUIRED', async () => {
     const id = readyAnchor();
     expect(revokeConsents(1, 'photo_usage')).toBeGreaterThan(0);
-    expect(codeOf(() => create(id))).toBe('CONSENT_REQUIRED');
+    expect(await createCode(id)).toBe('CONSENT_REQUIRED');
   });
 
-  it('SEC-04 第 7 步：额度不足 → QUOTA_EXCEEDED，且不产生 generations 行', () => {
+  it('SEC-04 第 7 步：额度不足 → QUOTA_EXCEEDED，且不产生 generations 行', async () => {
     const id = readyAnchor();
     getDb().prepare('UPDATE users SET daily_image_quota = 1 WHERE id = 1').run();
     const before = generationCount();
     try {
-      expect(codeOf(() => create(id, 2))).toBe('QUOTA_EXCEEDED');
+      expect(await createCode(id, 2)).toBe('QUOTA_EXCEEDED');
       expect(generationCount()).toBe(before);
       expect(getDay(1, dayKey()).images).toBe(0);
     } finally {
@@ -299,22 +325,22 @@ describe('createGeneration 的 8 步校验序列（modules/M06 §5.1，顺序即
     }
   });
 
-  it('SEC-05 第 8 步：已有非终态任务 → GENERATION_IN_PROGRESS，且不产生第二行', () => {
+  it('SEC-05 第 8 步：已有非终态任务 → GENERATION_IN_PROGRESS，且不产生第二行', async () => {
     const id = readyAnchor();
-    const first = create(id, 2);
+    const first = await create(id, 2);
     const before = generationCount();
-    expect(codeOf(() => create(id, 2))).toBe('GENERATION_IN_PROGRESS');
+    expect(await createCode(id, 2)).toBe('GENERATION_IN_PROGRESS');
     expect(generationCount()).toBe(before);
     expect(getDay(1, dayKey()).images).toBe(2);
     expect(first.status).toBe('queued');
   });
 
-  it('错误码顺序：额度不足时不报 GENERATION_IN_PROGRESS（第 7 步先于第 8 步）', () => {
+  it('错误码顺序：额度不足时不报 GENERATION_IN_PROGRESS（第 7 步先于第 8 步）', async () => {
     const id = readyAnchor();
-    create(id, 2); // 留下一个非终态行
+    await create(id, 2); // 留下一个非终态行
     getDb().prepare('UPDATE users SET daily_image_quota = 1 WHERE id = 1').run();
     try {
-      expect(codeOf(() => create(id, 2))).toBe('QUOTA_EXCEEDED');
+      expect(await createCode(id, 2)).toBe('QUOTA_EXCEEDED');
     } finally {
       getDb().prepare('UPDATE users SET daily_image_quota = 20 WHERE id = 1').run();
     }
@@ -322,11 +348,11 @@ describe('createGeneration 的 8 步校验序列（modules/M06 §5.1，顺序即
 });
 
 describe('createGeneration 的副作用与形状（E2E-03 / E2E-04 / E2E-08）', () => {
-  it('单事务入队：generations +1、usage.images +count、prompt 与 prompt_hash 取自 buildPrompt', () => {
+  it('单事务入队：generations +1、usage.images +count、prompt 与 prompt_hash 取自 buildPrompt', async () => {
     const photoId = makePreprocessedPhoto();
     const id = readyAnchor({ preprocessedPhotoId: photoId });
     const before = generationCount();
-    const record = create(id, 3);
+    const record = await create(id, 3);
 
     expect(generationCount()).toBe(before + 1);
     expect(getDay(1, dayKey())).toEqual({ userId: 1, day: dayKey(), generations: 1, images: 3 });
@@ -353,24 +379,24 @@ describe('createGeneration 的副作用与形状（E2E-03 / E2E-04 / E2E-08）',
     });
   });
 
-  it('E2E-04：reference_photo_ids 恰 1 个元素，且它指向 kind=preprocessed 的照片', () => {
+  it('E2E-04：reference_photo_ids 恰 1 个元素，且它指向 kind=preprocessed 的照片', async () => {
     const photoId = makePreprocessedPhoto();
     const id = readyAnchor({ preprocessedPhotoId: photoId });
-    const record = create(id, 2);
+    const record = await create(id, 2);
 
     expect(record.referencePhotoIds).toEqual([photoId]);
     const photo = getDb().prepare('SELECT kind FROM photos WHERE id = ?').get(photoId) as { kind: string };
     expect(photo.kind).toBe('preprocessed');
   });
 
-  it('preprocessed_photo_id 为 NULL 时 reference_photo_ids 为空数组', () => {
+  it('preprocessed_photo_id 为 NULL 时 reference_photo_ids 为空数组', async () => {
     const id = readyAnchor();
-    expect(create(id, 2).referencePhotoIds).toEqual([]);
+    expect((await create(id, 2)).referencePhotoIds).toEqual([]);
   });
 
-  it('audit_logs 写一行 generation.create（target = generation:<id>）', () => {
+  it('audit_logs 写一行 generation.create（target = generation:<id>）', async () => {
     const id = readyAnchor();
-    const record = create(id, 2);
+    const record = await create(id, 2);
     const n = (
       getDb()
         .prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'generation.create' AND target = ?")
@@ -381,9 +407,9 @@ describe('createGeneration 的副作用与形状（E2E-03 / E2E-04 / E2E-08）',
 });
 
 describe('readGenerationForUser / toGenerationDto（spec/03 §3.5、§4）', () => {
-  it('DTO 形状：eraName / sceneName 来自 config，results 为空数组，params 四项', () => {
+  it('DTO 形状：eraName / sceneName 来自 config，results 为空数组，params 四项', async () => {
     const id = readyAnchor({ preprocessedPhotoId: makePreprocessedPhoto() });
-    const record = create(id, 2);
+    const record = await create(id, 2);
     const dto = readGenerationForUser(1, record.id);
 
     expect(Object.keys(dto)).toEqual([
@@ -409,9 +435,9 @@ describe('readGenerationForUser / toGenerationDto（spec/03 §3.5、§4）', () 
     expect(dto.error).toBeNull();
   });
 
-  it('error.message 取 spec/03 §5 的文案，**不透出**库里的上游原文', () => {
+  it('error.message 取 spec/03 §5 的文案，**不透出**库里的上游原文', async () => {
     const id = readyAnchor();
-    const record = create(id, 2);
+    const record = await create(id, 2);
     getDb()
       .prepare("UPDATE generations SET status='failed', error_code='PROVIDER_ERROR', error_message=? WHERE id=?")
       .run('upstream raw: ModelNotOpen endpoint ep-123', record.id);
@@ -421,22 +447,22 @@ describe('readGenerationForUser / toGenerationDto（spec/03 §3.5、§4）', () 
     expect(JSON.stringify(dto)).not.toContain('ModelNotOpen');
   });
 
-  it('别人的任务 / 不存在 → NOT_FOUND', () => {
+  it('别人的任务 / 不存在 → NOT_FOUND', async () => {
     const id = readyAnchor();
-    const record = create(id, 2);
+    const record = await create(id, 2);
     expect(codeOf(() => readGenerationForUser(2, record.id))).toBe('NOT_FOUND');
     expect(codeOf(() => readGenerationForUser(1, 999999))).toBe('NOT_FOUND');
   });
 });
 
 describe('retryGeneration 的新建行语义（modules/M06 §5.7，E2E-09）', () => {
-  it('E2E-09：新行继承设定、attempt=0，旧行与其结果行逐列不变', () => {
+  it('E2E-09：新行继承设定、attempt=0，旧行与其结果行逐列不变', async () => {
     const id = readyAnchor({ preprocessedPhotoId: makePreprocessedPhoto() });
-    const first = create(id, 2);
+    const first = await create(id, 2);
     getDb().prepare("UPDATE generations SET status='succeeded', finished_at=? WHERE id=?").run(nowIso(), first.id);
     const before = getDb().prepare('SELECT * FROM generations WHERE id = ?').get(first.id);
 
-    const second = retryGeneration({ userId: 1, generationId: first.id });
+    const second = await retryGeneration({ userId: 1, generationId: first.id });
 
     expect(second.id).not.toBe(first.id);
     expect(second.status).toBe('queued');
@@ -450,10 +476,10 @@ describe('retryGeneration 的新建行语义（modules/M06 §5.7，E2E-09）', (
     expect(generationCount()).toBe(2);
   });
 
-  it('原任务 queued / running → GENERATION_IN_PROGRESS', () => {
+  it('原任务 queued / running → GENERATION_IN_PROGRESS', async () => {
     const id = readyAnchor();
-    const first = create(id, 2);
-    expect(codeOf(() => retryGeneration({ userId: 1, generationId: first.id }))).toBe('GENERATION_IN_PROGRESS');
+    const first = await create(id, 2);
+    expect(await retryCode({ userId: 1, generationId: first.id })).toBe('GENERATION_IN_PROGRESS');
 
     updateStatus({
       id: first.id,
@@ -464,31 +490,31 @@ describe('retryGeneration 的新建行语义（modules/M06 §5.7，E2E-09）', (
       startedAt: nowIso(),
       finishedAt: null,
     });
-    expect(codeOf(() => retryGeneration({ userId: 1, generationId: first.id }))).toBe('GENERATION_IN_PROGRESS');
+    expect(await retryCode({ userId: 1, generationId: first.id })).toBe('GENERATION_IN_PROGRESS');
   });
 
-  it('partial / failed 也可重试；别人的任务 / 不存在 → NOT_FOUND', () => {
+  it('partial / failed 也可重试；别人的任务 / 不存在 → NOT_FOUND', async () => {
     const id = readyAnchor();
     for (const status of ['partial', 'failed'] as const) {
       getDb().prepare('DELETE FROM generations').run();
-      const first = create(id, 2);
+      const first = await create(id, 2);
       getDb()
         .prepare('UPDATE generations SET status = ?, finished_at = ? WHERE id = ?')
         .run(status, nowIso(), first.id);
-      expect(retryGeneration({ userId: 1, generationId: first.id }).status).toBe('queued');
-      expect(codeOf(() => retryGeneration({ userId: 2, generationId: first.id }))).toBe('NOT_FOUND');
+      expect((await retryGeneration({ userId: 1, generationId: first.id })).status).toBe('queued');
+      expect(await retryCode({ userId: 2, generationId: first.id })).toBe('NOT_FOUND');
     }
   });
 
-  it('params_json 由旧行继承，不按当前环境重算（spec/03-接口契约.md §3.5）', () => {
+  it('params_json 由旧行继承，不按当前环境重算（spec/03-接口契约.md §3.5）', async () => {
     const id = readyAnchor();
-    const first = create(id, 2);
+    const first = await create(id, 2);
     const inherited = { size: '2048x2048', outputFormat: 'png', watermark: true, provider: 'real' } as const;
     getDb()
       .prepare("UPDATE generations SET params_json = ?, status = 'succeeded' WHERE id = ?")
       .run(JSON.stringify(inherited), first.id);
 
-    const second = retryGeneration({ userId: 1, generationId: first.id });
+    const second = await retryGeneration({ userId: 1, generationId: first.id });
     expect(second.params).toEqual(inherited);
   });
 });

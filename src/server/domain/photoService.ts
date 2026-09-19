@@ -6,7 +6,7 @@ import { nowIso } from './time';
 import { buildKey, getStorage, type ImageExt } from '../storage';
 import { probeImage } from '../images/probe';
 import { audit } from '../security/audit';
-import { moderateUpload } from '../security/moderation';
+import { callModeration, moderateUpload, recordModeration } from '../security/moderation';
 import {
   findActiveOriginalBySha256,
   findActivePhotoForUser,
@@ -15,7 +15,7 @@ import {
   softDeletePhoto,
   type PhotoRecord,
 } from '../db/repositories/photos';
-import type { Iso, ModerationVerdict, Photo } from '../../shared/types';
+import type { Iso, Photo } from '../../shared/types';
 
 /**
  * 照片上传 / 读图的编排与事务边界（`docs/prd/modules/M01-照片资产与存储.md` §6）。
@@ -80,37 +80,38 @@ export const uploadPhoto = async (params: { userId: number; file: UploadFile }):
   const createdAt = nowIso();
   const db = getDb();
 
-  // 同用户内内容去重：命中不落盘、不新增行，但仍补写 content_reviews + audit_logs（deduped: true）。
+  // 同用户内内容去重：命中不落盘、不新增行，但仍调上传阶段审核并补写 content_reviews + audit_logs（deduped: true）。
   const existing = findActiveOriginalBySha256(userId, sha256);
   if (existing !== null) {
-    const dedupVerdict = db.transaction(() => {
-      const v = moderateUpload({ userId, photoId: existing.id, now: createdAt });
-      if (v === 'reject') {
-        softDeletePhoto(existing.id, createdAt);
-        audit(
-          {
-            action: 'moderation.reject',
-            userId,
-            target: `photo:${existing.id}`,
-            meta: { stage: 'upload', targetId: existing.id, reason: null },
-          },
-          createdAt,
-        );
-      }
-      audit(
-        {
-          action: 'photo.upload',
-          userId,
-          target: `photo:${existing.id}`,
-          meta: { mime: existing.mime, bytes: existing.bytes, sha256, deduped: true },
-        },
-        createdAt,
-      );
-      return v;
-    })();
-    if (dedupVerdict === 'reject') throw appError('CONTENT_REJECTED');
+    const dedupVerdict = await moderateUpload({
+      userId,
+      photoId: existing.id,
+      image: { mime: existing.mime, base64: buffer.toString('base64') },
+      now: createdAt,
+    });
+    audit(
+      {
+        action: 'photo.upload',
+        userId,
+        target: `photo:${existing.id}`,
+        meta: { mime: existing.mime, bytes: existing.bytes, sha256, deduped: true },
+      },
+      createdAt,
+    );
+    if (dedupVerdict === 'reject') {
+      softDeletePhoto(existing.id, createdAt);
+      throw appError('CONTENT_REJECTED');
+    }
     return existing;
   }
+
+  // 上传阶段审核的**模型调用**（`modules/M07` §5.6 的 `upload` 行）：异步，必须在事务之外先跑完；
+  // 判定落库（`content_reviews` + `moderation.reject`）随后放进同一个事务里（§5.6 的三写一致性）。
+  // 失败即视为未审核 → 不放过：不落盘、不建行，按上游映射抛出。
+  const decision = await callModeration({
+    stage: 'upload',
+    image: { mime: file.type, base64: buffer.toString('base64') },
+  });
 
   const key = buildKey(userId, ext);
   const storage = getStorage();
@@ -125,10 +126,11 @@ export const uploadPhoto = async (params: { userId: number; file: UploadFile }):
     throw err; // probeImage 已按 §6.4 分类为 INVALID_FILE_TYPE / STORAGE_ERROR
   }
 
+  // 单事务三写（`modules/M01` §5.6）：`photos` 行 + `photo.upload` 审计 + 审核判定（`content_reviews`）；
+  // `reject` 时在同一事务内立即软删该行（磁盘文件由 `runPurge()` 清理）并写 `moderation.reject` 审计。
   let photo: PhotoRecord;
-  let verdict: ModerationVerdict;
   try {
-    ({ photo, verdict } = db.transaction(() => {
+    photo = db.transaction(() => {
       const inserted = insertPhoto({
         userId,
         kind: 'original',
@@ -151,29 +153,24 @@ export const uploadPhoto = async (params: { userId: number; file: UploadFile }):
         },
         createdAt,
       );
-      const v = moderateUpload({ userId, photoId: inserted.id, now: createdAt });
-      if (v === 'reject') {
-        // 内容审核是阻断式的：同一事务内立即软删（磁盘文件由 runPurge() 清理）并记审计。
-        softDeletePhoto(inserted.id, createdAt);
-        audit(
-          {
-            action: 'moderation.reject',
-            userId,
-            target: `photo:${inserted.id}`,
-            meta: { stage: 'upload', targetId: inserted.id, reason: null },
-          },
-          createdAt,
-        );
-      }
-      return { photo: inserted, verdict: v };
-    })());
+      recordModeration({
+        userId,
+        stage: 'upload',
+        targetType: 'photo',
+        targetId: inserted.id,
+        decision,
+        now: createdAt,
+      });
+      if (decision.verdict === 'reject') softDeletePhoto(inserted.id, createdAt);
+      return inserted;
+    })();
   } catch (err) {
     await storage.delete(key).catch(() => undefined);
     throw asStorageError(err);
   }
 
   // 软删与审计已随事务提交；在事务内 `throw` 会把它们一起回滚，所以 422 在提交之后再抛。
-  if (verdict === 'reject') throw appError('CONTENT_REJECTED');
+  if (decision.verdict === 'reject') throw appError('CONTENT_REJECTED');
   return photo;
 };
 

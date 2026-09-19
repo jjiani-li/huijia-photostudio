@@ -1,12 +1,24 @@
 import type { AnchorFeatures } from '../../shared/types';
 import { ArkUpstreamError } from './errors';
-import { readFailureFixture, readFixture, type MockFailureId } from './fixtures';
+import {
+  readEraCheckFixture,
+  readFailureFixture,
+  readFixture,
+  readSafetyReviewFixture,
+  selectEraCheckCase,
+  selectSafetyVariant,
+  type MockFailureId,
+} from './fixtures';
 import type {
   AnchorExtractInput,
   AnchorExtractResult,
   ArkImageRequest,
   ArkImageResult,
   ArkProvider,
+  EraReviewInput,
+  EraReviewResult,
+  SafetyReviewInput,
+  SafetyReviewResult,
 } from './types';
 
 /**
@@ -23,7 +35,6 @@ interface ImageGenerationFixture {
   model: string;
   data: Array<{ url: string; size: string | null }>;
 }
-
 const IMAGE_FIXTURE_COUNT = 3;
 const AGE_MIN = 40;
 const AGE_SPAN = 45; // 40–84
@@ -87,5 +98,41 @@ export class MockArkProvider implements ArkProvider {
       };
     });
     return { images, model: fixture.model };
+  }
+
+  /**
+   * 内容审核回放（`fixtures/ark/safety-review.json`）：`switchVariants[stage]` 优先于
+   * `defaultVariantId`，**按阶段分别开闸**（`modules/M07` §7.2–§7.3）。
+   */
+  async reviewSafety(input: SafetyReviewInput): Promise<SafetyReviewResult> {
+    await delay(SLEEP_BASE_MS + (hash(`${input.stage}:${input.image ?? input.text ?? ''}`) % SLEEP_SPAN_MS));
+    const fixture = readSafetyReviewFixture();
+    const variant = selectSafetyVariant(fixture, input.stage);
+    if (variant === undefined) {
+      throw new ArkUpstreamError({ kind: 'http', errorCode: 'EmptyData', message: 'safety-review fixture 无可用 variant' });
+    }
+    return { raw: JSON.stringify({ verdict: variant.verdict, reason: variant.reason }), model: fixture.model };
+  }
+
+  /**
+   * 年代穿帮复核回放（`fixtures/ark/era-check.json`）：`switch.activeCaseId` 优先于 `match`
+   * （`eraCode` + `sceneId` 同时相等才命中），都不命中取 `defaultCaseId`（`modules/M07` §7.1）。
+   * `estimatedAgeRange` 为 `null` 时用回放上下文的 `anchorAgeRange` 回填（中值相同 ⇒ `age_delta = 0`）。
+   */
+  async reviewEra(input: EraReviewInput): Promise<EraReviewResult> {
+    await delay(SLEEP_BASE_MS + (hash(input.image) % SLEEP_SPAN_MS));
+    const fixture = readEraCheckFixture();
+    const picked = selectEraCheckCase(fixture, { eraCode: input.eraCode, sceneId: input.sceneId });
+    if (picked === undefined) {
+      throw new ArkUpstreamError({ kind: 'http', errorCode: 'EmptyData', message: 'era-check fixture 无可用 case' });
+    }
+    return {
+      raw: JSON.stringify({
+        verdict: picked.verdict,
+        findings: picked.findings,
+        estimatedAgeRange: picked.estimatedAgeRange ?? input.anchorAgeRange,
+      }),
+      model: fixture.model,
+    };
   }
 }

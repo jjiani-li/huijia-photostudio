@@ -532,12 +532,13 @@ const makeReadyAnchor = (): number => {
   return id;
 };
 
-const createFor = (anchorId: number, count: number) =>
+/** `createGeneration` 现为 `async`（prompt 阶段审核要 await 上游），本文件一律 `await`。 */
+const createFor = async (anchorId: number, count: number) =>
   createGeneration({ userId: DEV_USER, anchorId, eraCode: 'E2', sceneId: 1, count });
 
-const codeOfCreate = (fn: () => void): string => {
+const codeOfCreate = async (fn: () => Promise<unknown>): Promise<string> => {
   try {
-    fn();
+    await fn();
     return 'NO_THROW';
   } catch (err) {
     return err instanceof AppError ? err.code : `ERROR:${String(err)}`;
@@ -549,14 +550,14 @@ const HOUR_AGO = new Date(Date.now() - 3_600_000).toISOString();
 checks.push(
   {
     id: 'SEC-04',
-    run: () => {
+    run: async () => {
       const anchorId = makeReadyAnchor();
       snapshotUsage();
       const limit = currentQuota();
       const before = count('generations');
       try {
         setQuota(1);
-        const code = codeOfCreate(() => createFor(anchorId, 2));
+        const code = await codeOfCreate(() => createFor(anchorId, 2));
         setQuota(limit);
         const after = count('generations');
         return {
@@ -571,15 +572,15 @@ checks.push(
   },
   {
     id: 'SEC-05',
-    run: () => {
+    run: async () => {
       const anchorId = makeReadyAnchor();
       snapshotUsage();
       const created: number[] = [];
       try {
-        const first = createFor(anchorId, 2);
+        const first = await createFor(anchorId, 2);
         created.push(first.id);
         cleanups.push(() => deleteGenerations(created));
-        const code = codeOfCreate(() => createFor(anchorId, 2));
+        const code = await codeOfCreate(() => createFor(anchorId, 2));
         const rows = (
           getDb().prepare('SELECT COUNT(*) AS n FROM generations WHERE id = ?').get(first.id) as { n: number }
         ).n;
@@ -595,12 +596,12 @@ checks.push(
   },
   {
     id: 'E2E-04',
-    run: () => {
+    run: async () => {
       const anchorId = makeReadyAnchor();
       snapshotUsage();
       const created: number[] = [];
       try {
-        const record = createFor(anchorId, 2);
+        const record = await createFor(anchorId, 2);
         created.push(record.id);
         cleanups.push(() => deleteGenerations(created));
         const photoId = record.referencePhotoIds[0];
@@ -621,12 +622,12 @@ checks.push(
   },
   {
     id: 'E2E-09',
-    run: () => {
+    run: async () => {
       const anchorId = makeReadyAnchor();
       snapshotUsage();
       const created: number[] = [];
       try {
-        const first = createFor(anchorId, 2);
+        const first = await createFor(anchorId, 2);
         created.push(first.id);
         cleanups.push(() => deleteGenerations(created));
         getDb()
@@ -636,7 +637,7 @@ checks.push(
           getDb().prepare('SELECT * FROM generations WHERE id = ?').get(first.id),
         );
 
-        const second = retryGeneration({ userId: DEV_USER, generationId: first.id });
+        const second = await retryGeneration({ userId: DEV_USER, generationId: first.id });
         created.push(second.id);
 
         const afterOld = JSON.stringify(getDb().prepare('SELECT * FROM generations WHERE id = ?').get(first.id));
@@ -659,14 +660,14 @@ checks.push(
   },
   {
     id: 'ERR-02',
-    run: () => {
+    run: async () => {
       const anchorId = makeReadyAnchor();
       const created: number[] = [];
       let jobId: number | null = null;
       try {
         // 先入队（此时锚点仍可生成），再把三张表各造一行「1 小时前的 running」。
         snapshotUsage();
-        const generation = createFor(anchorId, 2);
+        const generation = await createFor(anchorId, 2);
         created.push(generation.id);
         cleanups.push(() => deleteGenerations(created));
         getDb()
@@ -822,12 +823,19 @@ const makeGeneratableAnchor = async (): Promise<number> => {
 };
 
 /** 删掉一次生成带来的行与磁盘文件（结果照片 + `photo.mark` / `generation.finish` 审计）。 */
-const purgeGeneration = (generationId: number): void => {
-  const photoIds = (
-    getDb()
-      .prepare('SELECT photo_id FROM generation_results WHERE generation_id = ?')
-      .all(generationId) as { photo_id: number }[]
-  ).map((r) => r.photo_id);
+/**
+ * 删掉一次生成带来的行与磁盘文件（结果照片 + `photo.mark` / `generation.finish` 审计 + `content_reviews`）。
+ * `extraPhotoIds` 用于收录**内容审核被拒、没有 `generation_results` 行**的软删生成图（`SEC-08`）。
+ */
+const purgeGeneration = (generationId: number, extraPhotoIds: number[] = []): void => {
+  const photoIds = [
+    ...(
+      getDb()
+        .prepare('SELECT photo_id FROM generation_results WHERE generation_id = ?')
+        .all(generationId) as { photo_id: number }[]
+    ).map((r) => r.photo_id),
+    ...extraPhotoIds,
+  ];
   for (const photoId of photoIds) {
     const row = getDb().prepare('SELECT storage_key FROM photos WHERE id = ?').get(photoId) as
       | { storage_key: string }
@@ -843,9 +851,43 @@ const purgeGeneration = (generationId: number): void => {
     getDb().prepare('DELETE FROM photos WHERE id = ?').run(photoId);
   }
   getDb().prepare('DELETE FROM generation_results WHERE generation_id = ?').run(generationId);
+  getDb()
+    .prepare('DELETE FROM content_reviews WHERE target_type = ? AND target_id = ?')
+    .run('generation', generationId);
   getDb().prepare('DELETE FROM audit_logs WHERE target = ?').run(`generation:${generationId}`);
   getDb().prepare('DELETE FROM generations WHERE id = ?').run(generationId);
 };
+
+/** 审核 fixture 的路径与开关写入 / 还原（`modules/M07` §7.2–§7.3，`SEC-08` 用）。 */
+const SAFETY_FIXTURE = 'fixtures/ark/safety-review.json';
+
+const setSafetyVariant = (stage: 'upload' | 'prompt' | 'result', variantId: string | null): void => {
+  const parsed = JSON.parse(fs.readFileSync(SAFETY_FIXTURE, 'utf8')) as {
+    switchVariants: Record<string, string | null>;
+  };
+  parsed.switchVariants[stage] = variantId;
+  fs.writeFileSync(SAFETY_FIXTURE, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
+};
+
+const softDeletedGeneratedCount = (): number =>
+  (getDb().prepare("SELECT COUNT(*) AS n FROM photos WHERE kind = 'generated' AND deleted_at IS NOT NULL").get() as {
+    n: number;
+  }).n;
+
+const contentReviewRows = (
+  generationId: number,
+  stage: string,
+): { verdict: string; reason: string | null }[] =>
+  getDb()
+    .prepare(
+      "SELECT verdict, reason FROM content_reviews WHERE target_type = 'generation' AND target_id = ? AND stage = ?",
+    )
+    .all(generationId, stage) as { verdict: string; reason: string | null }[];
+
+const moderationRejectRows = (generationId: number): { meta_json: string | null }[] =>
+  getDb()
+    .prepare("SELECT meta_json FROM audit_logs WHERE action = 'moderation.reject' AND target = ?")
+    .all(`generation:${generationId}`) as { meta_json: string | null }[];
 
 interface ResultRow {
   photo_id: number;
@@ -918,12 +960,22 @@ const withGeneration = async <T>(
   const anchorId = await makeGeneratableAnchor();
   snapshotUsage();
   const imagesBefore = getDay(DEV_USER, dayKey()).images;
-  const record = createFor(anchorId, count);
-  cleanups.push(() => purgeGeneration(record.id));
+  // 审核被拒的生成图没有 `generation_results` 行，只能按「跑之前不存在的 photos 行」收录后清理。
+  const photosBefore = new Set(
+    (getDb().prepare('SELECT id FROM photos').all() as { id: number }[]).map((row) => row.id),
+  );
+  const record = await createFor(anchorId, count);
+  const cleanup = (): void => {
+    const newPhotos = (getDb().prepare('SELECT id FROM photos').all() as { id: number }[])
+      .map((row) => row.id)
+      .filter((id) => !photosBefore.has(id));
+    purgeGeneration(record.id, newPhotos);
+  };
+  cleanups.push(cleanup);
   try {
     return await fn({ id: record.id, imagesBefore });
   } finally {
-    purgeGeneration(record.id);
+    cleanup();
   }
 };
 
@@ -1114,6 +1166,42 @@ checks.push(
           };
         } finally {
           provider.setFailure(null);
+        }
+      }),
+  },
+  {
+    // `SEC-08`（`docs/prd/modules/M07-生成后复核与内容审核.md` §8 归属本模块）：把
+    // `switchVariants.result` 置为 `reject-violation` → 全部张被拒（`n === 0`）→ 任务 `failed` +
+    // `CONTENT_REJECTED`，被拒张不写 `generation_results` 行，写 `content_reviews(stage='result')` 与
+    // `audit_logs(action='moderation.reject')`，被拒的已转存图立即软删。**跑完必须还原开关**。
+    id: 'SEC-08',
+    run: () =>
+      withGeneration(2, async ({ id }) => {
+        const original = fs.readFileSync(SAFETY_FIXTURE, 'utf8');
+        const softDeletedBefore = softDeletedGeneratedCount();
+        setSafetyVariant('result', 'reject-violation');
+        try {
+          await runGeneration(id);
+          const row = generationRow(id);
+          const results = resultRows(id);
+          const reviews = contentReviewRows(id, 'result');
+          const rejects = moderationRejectRows(id);
+          const softDeleted = softDeletedGeneratedCount() - softDeletedBefore;
+          const ok =
+            row.status === 'failed' &&
+            row.error_code === 'CONTENT_REJECTED' &&
+            results.length === 0 &&
+            reviews.length === 1 &&
+            reviews[0]?.verdict === 'reject' &&
+            rejects.length === 1 &&
+            softDeleted === 1;
+          return {
+            ok,
+            expected: 'failed/CONTENT_REJECTED、无结果行、1 行 content_reviews(reject)、1 行 moderation.reject、被拒图软删',
+            actual: `${row.status}/${row.error_code}、结果行 ${results.length}、reviews ${reviews.length}(${reviews[0]?.verdict ?? '-'})、reject 审计 ${rejects.length}、软删 ${softDeleted}`,
+          };
+        } finally {
+          fs.writeFileSync(SAFETY_FIXTURE, original, 'utf8');
         }
       }),
   },

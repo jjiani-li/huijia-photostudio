@@ -14,14 +14,18 @@ import {
   type GenerationRecord,
   type GenerationStatus,
 } from '../../server/db/repositories/generations';
-import { findActivePhotoForUser, insertPhoto } from '../../server/db/repositories/photos';
+import { findById as findAnchorById } from '../../server/db/repositories/anchors';
+import { getEra } from '../../server/db/repositories/config';
+import { findActivePhotoForUser, insertPhoto, softDeletePhoto } from '../../server/db/repositories/photos';
 import { rollback } from '../../server/db/repositories/usage';
 import { AIGC_MARKER, markGeneratedImage } from '../../server/images/mark';
 import { probeImage } from '../../server/images/probe';
 import { audit } from '../../server/security/audit';
+import { eraReview } from '../../server/security/eraReview';
+import { moderateResult } from '../../server/security/moderation';
 import { buildKey, getStorage, type ImageExt } from '../../server/storage';
 import { AUTO_RETRY_ERROR_CODES, isAutoRetryable } from '../settle';
-import type { ErrorCode } from '../../shared/types';
+import type { EraCheck, ErrorCode, ModerationVerdict } from '../../shared/types';
 
 /**
  * `generations` 的 handler（`docs/prd/modules/M06-生成编排.md` §5.9）：
@@ -107,6 +111,10 @@ interface Produced {
   photoId: number;
   ordinal: number;
   seed: number | null;
+  /** 年代复核快照；复核失败留 `NULL`（软标注不阻断，`modules/M07` §5.3）。 */
+  eraCheck: EraCheck | null;
+  /** 年龄偏差（有符号；负 = 变年轻），不可计算留 `NULL`。 */
+  ageDelta: number | null;
 }
 
 /**
@@ -132,6 +140,8 @@ const commitTerminal = (
         photoId: row.photoId,
         ordinal: row.ordinal,
         seed: row.seed,
+        eraCheck: row.eraCheck,
+        ageDelta: row.ageDelta,
         createdAt: finishedAt,
       });
     }
@@ -155,7 +165,11 @@ const commitTerminal = (
  * → 写 `audit_logs(action='photo.mark')`。宽高一律取 `probeImage()` 的**实测值**，不得写请求的 `size`；
  * `photos.bytes` 取标识写入**之后**的长度（`E2E-06`）。
  */
-const storeImage = async (generation: GenerationRecord, url: string, signal?: AbortSignal): Promise<number> => {
+const storeImage = async (
+  generation: GenerationRecord,
+  url: string,
+  signal?: AbortSignal,
+): Promise<{ photoId: number; bytes: Buffer }> => {
   const format = generation.params.outputFormat;
   const bytes = await readUpstreamBytes(url, signal);
   const probe = await probeImage(bytes);
@@ -205,8 +219,21 @@ const storeImage = async (generation: GenerationRecord, url: string, signal?: Ab
     target: `photo:${photo.id}`,
     meta: markMeta,
   });
-  return photo.id;
+  return { photoId: photo.id, bytes: marked };
 };
+
+/**
+ * 撤销一张已转存的生成图（`modules/M07` §5.6）：内容审核判定为 `reject` 或审核失败时**软删**该
+ * `kind='generated'` 行（磁盘文件由 `runPurge()` 清理），该张不计入产出 `n`。
+ */
+const discardStoredImage = (photoId: number): void => {
+  softDeletePhoto(photoId, nowIso());
+};
+
+const toDataUri = (mime: string, bytes: Buffer): { mime: string; base64: string } => ({
+  mime,
+  base64: bytes.toString('base64'),
+});
 
 /**
  * 执行一个生成任务。`signal` 来自 worker 的 `JOB_TIMEOUT_SECONDS` 竞速（`spec/04` §4.6）。
@@ -256,17 +283,19 @@ export const runGenerateJob = async (generation: GenerationRecord, signal?: Abor
       signal,
     );
 
-    // 逐张立即转存，`ordinal` 从 0 连续递增；单张失败只少一张，不中止整条任务。
+    // 复核的上下文（`modules/M07` §5.2）：所选年代口径取 `eras.name` / `eras.constraint_pack`，
+    // 年龄基准取 `identity_anchors.features_json.ageRange`（只用结构化字段，不解析 `anchor_text`，§5.4）。
+    const era = getEra(generation.eraCode);
+    const anchor = findAnchorById(generation.anchorId);
+
+    // 逐张：转存 → 审核（硬闸门）→ 复核（软标注），`ordinal` 从 0 连续递增。固定顺序见 `modules/M07` §5.1：
+    // 审核在前（`reject` 撤销该张及后续张的转存，越早发现代价越小），复核在后（失败只少一个标注）。
     for (const [index, item] of result.images.entries()) {
+      let stored: { photoId: number; bytes: Buffer };
       try {
-        const photoId = await storeImage(generation, item.url, signal);
-        // ── T11 hook ──：本张转存后按 `modules/M07-生成后复核与内容审核.md` §5.1 的顺序处理：
-        // `moderateResult()`（硬闸门：`reject` → 撤销该张及后续张的转存、写 `content_reviews(stage='result')`
-        // 与 `audit_logs('moderation.reject')`，被拒张不计入 `n`），随后 `eraReview()`（软标注：回填
-        // `generation_results.era_check_json` / `age_delta`，失败留 `NULL` 并 warn）。本工单不实现、不写
-        // `content_reviews`（`tickets/T11` 拥有）。
-        produced.push({ photoId, ordinal: produced.length, seed: item.seed });
+        stored = await storeImage(generation, item.url, signal);
       } catch (err) {
+        // 单张转存失败只少一张，不中止整条任务（`modules/M06` §5.9 ③）。
         lastFailure = toFailure(err);
         log('warn', '转存失败，跳过该张', {
           generationId: generation.id,
@@ -274,7 +303,62 @@ export const runGenerateJob = async (generation: GenerationRecord, signal?: Abor
           code: lastFailure.code,
           reason: lastFailure.raw.slice(0, CONTENT_LOG_LIMIT),
         });
+        continue;
       }
+
+      // ② 审核在前，硬闸门（`modules/M07` §5.6）：`reject` → 撤销该张及后续张的转存。
+      let verdict: ModerationVerdict;
+      try {
+        verdict = await moderateResult({
+          userId: generation.userId,
+          generationId: generation.id,
+          image: toDataUri(FORMAT_MIME[generation.params.outputFormat], stored.bytes),
+        });
+      } catch (err) {
+        // 审核失败（内部已重试 1 次）**不放过未审核的结果**：撤销该张、中止后续张，终态按 `n` 判定。
+        lastFailure = toFailure(err);
+        discardStoredImage(stored.photoId);
+        log('warn', '审核失败，撤销该张并中止后续', {
+          generationId: generation.id,
+          ordinal: index,
+          code: lastFailure.code,
+          reason: lastFailure.raw.slice(0, CONTENT_LOG_LIMIT),
+        });
+        break;
+      }
+      if (verdict === 'reject') {
+        lastFailure = { code: 'CONTENT_REJECTED', raw: ERROR_MESSAGE.CONTENT_REJECTED, retryable: false };
+        discardStoredImage(stored.photoId);
+        log('warn', '内容审核拒绝，撤销该张并中止后续', {
+          generationId: generation.id,
+          ordinal: index,
+        });
+        break;
+      }
+
+      // ③ 复核在后，软标注（`modules/M07` §5.1 ③）：失败留 `NULL` 并 warn，不占用撤销路径。
+      let eraCheck: EraCheck | null = null;
+      let ageDelta: number | null = null;
+      try {
+        const review = await eraReview({
+          image: `data:${FORMAT_MIME[generation.params.outputFormat]};base64,${stored.bytes.toString('base64')}`,
+          eraCode: generation.eraCode,
+          sceneId: generation.sceneId,
+          eraName: era?.name ?? generation.eraCode,
+          constraintPack: era?.constraintPack ?? '',
+          anchorAgeRange: anchor?.features?.ageRange ?? null,
+        });
+        eraCheck = review.eraCheck;
+        ageDelta = review.ageDelta;
+      } catch (err) {
+        log('warn', '年代复核失败，留 NULL 继续', {
+          generationId: generation.id,
+          ordinal: index,
+          reason: describe(err).slice(0, CONTENT_LOG_LIMIT),
+        });
+      }
+
+      produced.push({ photoId: stored.photoId, ordinal: produced.length, seed: item.seed, eraCheck, ageDelta });
     }
   } catch (err) {
     lastFailure = toFailure(err);

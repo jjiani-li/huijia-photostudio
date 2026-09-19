@@ -305,22 +305,29 @@ export interface InsertResultInput {
   photoId: number;
   ordinal: number;
   seed: number | null;
+  /** 年代复核快照（`tickets/T11`）：复核成功才非空，失败/未跑为 `NULL`。 */
+  eraCheck: EraCheck | null;
+  /** 年龄偏差（有符号整数，负 = 变年轻）：不可计算为 `NULL`（`modules/M07` §5.4）。 */
+  ageDelta: number | null;
   createdAt: Iso;
 }
 
 /**
  * 插一行结果（`modules/M06` §5.9 ⑤）：`ordinal` 由调用方按产出顺序给 0..n-1 连续值。
- * `era_check_json` / `age_delta` 留 `NULL`，由 `tickets/T11` 的复核回填；`realism_score` 本期恒 `NULL`。
+ * `era_check_json` / `age_delta` 由 `tickets/T11` 的复核产出后随行写入；`realism_score` 本期恒 `NULL`。
  */
 export const insertResult = (input: InsertResultInput): void => {
   getDb()
     .transaction(() =>
       getDb()
         .prepare(
-          `INSERT INTO generation_results (generation_id, photo_id, ordinal, seed, created_at)
-           VALUES (@generationId, @photoId, @ordinal, @seed, @createdAt)`,
+          `INSERT INTO generation_results (generation_id, photo_id, ordinal, seed, era_check_json, age_delta, created_at)
+           VALUES (@generationId, @photoId, @ordinal, @seed, @eraCheckJson, @ageDelta, @createdAt)`,
         )
-        .run(input),
+        .run({
+          ...input,
+          eraCheckJson: input.eraCheck === null ? null : JSON.stringify(input.eraCheck),
+        }),
     )();
 };
 

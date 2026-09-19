@@ -11,6 +11,6 @@ export const dynamic = 'force-dynamic';
 export const POST = withErrorHandling(async (_req: NextRequest, ctx: RouteContext<{ id: string }>) => {
   const user = requireUser();
   const { id } = await ctx.params;
-  const generation = retryGeneration({ userId: user.id, generationId: parsePositiveInt(id, 'id') });
+  const generation = await retryGeneration({ userId: user.id, generationId: parsePositiveInt(id, 'id') });
   return ok({ generation: toGenerationDto(generation) }, 202);
 });
