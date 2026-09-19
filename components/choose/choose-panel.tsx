@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { apiRequest, toErrorNotice, type ApiNotice } from '../../src/shared/api-client';
 import { takeReverseSuggestion } from '../../src/shared/reverse-suggestion';
+import { hasUnauthenticated, loginPath } from '../../src/shared/session';
 import type { Anchor, Generation, Quota, User } from '../../src/shared/types';
 import { useApiRequest } from '../../hooks/use-api-request';
 import { useEraSceneConfig } from '../../hooks/use-era-scene-config';
@@ -14,8 +15,6 @@ import {
   applyReverseSuggestion,
   confirmPath,
   EMPTY_CONFIG_COPY,
-  hasUnauthenticated,
-  loginPath,
   matchSelection,
   readSelection,
   shouldRedirectToConfirm,

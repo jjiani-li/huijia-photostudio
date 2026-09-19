@@ -1580,6 +1580,46 @@ checks.push(
       };
     },
   },
+  {
+    // ── `tickets/T17` 情感安全提示（`docs/prd/spec/07-验收标准.md` §2.8、`spec/06-合规与风控.md` §9.2：CMP-06）──
+    // 静态扫描，不读库、不发请求：语义句落点 + 会话态不落 web storage（`pages/P00` §6）。
+    id: 'CMP-06',
+    run: () => {
+      // 语义与触发口径见 `docs/prd/spec/06-合规与风控.md` §9.2、`docs/prd/pages/P04-失败与情绪安全路径.md` §4；
+      // 检测口径：语义句至少落在一处源码（两段都要），且这四个目录**没有**把状态写进 web storage。
+      const SEMANTICS = ['基于照片的重建', '无法替代真实'];
+      const files: { path: string; text: string }[] = [];
+      const walk = (dir: string): void => {
+        if (!fs.existsSync(dir)) return;
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            walk(full);
+            continue;
+          }
+          if (!/\.tsx?$/.test(entry.name) || /\.test\.tsx?$/.test(entry.name)) continue;
+          files.push({
+            path: path.relative(process.cwd(), full).split(path.sep).join('/'),
+            text: fs.readFileSync(full, 'utf8'),
+          });
+        }
+      };
+      for (const root of ['app', 'components', 'hooks', 'src']) walk(root);
+
+      const carriers = files.filter((f) => SEMANTICS.every((s) => f.text.includes(s)));
+      // 只认真正的读写调用（`localStorage.setItem(...)` / `window.sessionStorage[key]`）；
+      // 注释与测试里的「不落 localStorage」字样不算（`pages/P00-设计基准与路由.md` §6 的措辞禁令）。
+      const storageRe = /(?:window\.)?(?:local|session)Storage\s*[.[]/;
+      const storers = files.filter((f) => storageRe.test(f.text));
+
+      return {
+        ok: carriers.length >= 1 && storers.length === 0,
+        expected:
+          '语义句（含「基于照片的重建」与「无法替代真实」）至少落在一处；app/components/hooks/src 无 localStorage / sessionStorage 读写',
+        actual: `语义句落点=${carriers.map((f) => f.path).join(',') || '(无)'}；存储读写=${storers.map((f) => f.path).join(',') || '(无)'}`,
+      };
+    },
+  },
 );
 
 // ── `tickets/T18` 图片反推提示词（`docs/prd/modules/M09-图片反推提示词.md` §9：API-08、REV-01–REV-03）──

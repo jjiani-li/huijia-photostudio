@@ -142,19 +142,6 @@ export const startGeneration = async (input: StartGenerationInput): Promise<Star
 export const EMPTY_CONFIG_COPY = '年代和场景还没准备好，先跑一次 pnpm seed。';
 
 /**
- * 会话失效时跳登录并**保留 `next`**（`pages/P02` §8、`pages/P00` §5.1 规则 ③）：
- * 请求回 401 时（cookie 被清掉而布局的软守卫没拦住）跳过去，登录后回到当前页。
- */
-export const loginPath = (pathname: string): string => `/login?next=${encodeURIComponent(pathname)}`;
-
-/**
- * 任一取数回 `UNAUTHENTICATED` 即视为会话失效（`pages/P02` §8：401 统一跳登录路由）；
- * 其余错误码仍走 `ErrorNotice`，不白屏。
- */
-export const hasUnauthenticated = (codes: readonly (string | undefined)[]): boolean =>
-  codes.includes('UNAUTHENTICATED');
-
-/**
  * 把 URL 里的值对着配置表核一遍（`pages/P02` §10 的「非法值回退」）：形状合法但配置里不存在的
  * 年代代号 / 场景 id 一律当作未选，不让它进 gate 与组合匹配；配置还没取到（`null`）时按未选处理。
  * 只读 `eras[].code` 与 `scenes[].id`，故参数收窄成这两个字段。

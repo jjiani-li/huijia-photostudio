@@ -8,7 +8,7 @@ import { ERROR_CODES } from '../src/shared/types';
 /**
  * `ErrorNotice`（`docs/prd/pages/P00-设计基准与路由.md` §8）：`docs/prd/spec/03-接口契约.md` §5 错误码在
  * 前端的**唯一落点**。主文案**直接用服务端 `error.message`**（前端不重写）；未知 `code` → 按 `INTERNAL`。
- * worker 未存活提示不走这里（它不是 API 错误，见 `provider-badge.tsx` 的 `WorkerNotice`）。
+ * worker 未存活提示不走这里（它不是 API 错误，见 `components/worker-notice.tsx`）。
  */
 export interface ErrorNoticeProps {
   error: ApiNotice | null;
