@@ -1,3 +1,22 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    /* Token 的 CSS 变量镜像；色值本体只定义在 tailwind.config.ts（P00 §3.2、§3.4）。 */
+    --color-background: theme('colors.background');
+    --color-surface: theme('colors.surface');
+    --color-ink: theme('colors.ink.DEFAULT');
+    --color-ink-soft: theme('colors.ink.soft');
+    --color-primary: theme('colors.primary.DEFAULT');
+    --color-danger: theme('colors.danger');
+  }
+
+  html {
+    /* P00 §4.1：全局字距与抗锯齿。 */
+    letter-spacing: 0.01em;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: 'kern' 1;
+  }
+}

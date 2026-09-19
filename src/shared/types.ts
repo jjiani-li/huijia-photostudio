@@ -76,6 +76,19 @@ export const quotaSchema = z.object({
   remaining: z.number().int(),
 });
 
+/** 实名状态（`docs/prd/spec/03-接口契约.md` §3.1、§4；`/api/me/realname` 的响应体）。 */
+export interface RealNameStatus {
+  verified: boolean;
+  verifiedAt: Iso | null;
+  realName: string | null;
+}
+
+export const realNameStatusSchema = z.object({
+  verified: z.boolean(),
+  verifiedAt: z.string().nullable(),
+  realName: z.string().nullable(),
+});
+
 /** 错误响应的统一 envelope（`docs/prd/spec/03-接口契约.md` §1.3）；成功响应不用 envelope。 */
 export interface ApiError {
   error: {
@@ -444,4 +457,25 @@ export const historyItemSchema = z.object({
 export const historyListSchema = z.object({
   items: z.array(historyItemSchema),
   nextCursor: z.string().nullable(),
+});
+
+// ── 健康检查（`docs/prd/spec/03-接口契约.md` §3.7；`hooks/use-health.ts` 消费）──────────────
+
+export interface Health {
+  ok: boolean;
+  db: { ok: boolean; eras: number; scenes: number; profiles: number };
+  provider: { mode: 'mock' | 'real'; arkConfigured: boolean };
+  worker: { alive: boolean; lastSeenAt: Iso | null };
+}
+
+export const healthSchema = z.object({
+  ok: z.boolean(),
+  db: z.object({
+    ok: z.boolean(),
+    eras: z.number().int(),
+    scenes: z.number().int(),
+    profiles: z.number().int(),
+  }),
+  provider: z.object({ mode: z.enum(['mock', 'real']), arkConfigured: z.boolean() }),
+  worker: z.object({ alive: z.boolean(), lastSeenAt: z.string().nullable() }),
 });
