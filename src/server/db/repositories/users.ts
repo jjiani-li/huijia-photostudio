@@ -127,7 +127,8 @@ export interface VerifyRealNameInput {
 /**
  * 实名落库（`docs/prd/modules/M08-账号历史与彻底删除.md` §2.2）：一次 UPDATE 写齐
  * `real_name` / `id_hash` / `verified_at` 三列，`verified_at` 非空即已实名。
- * 唯一性由 `auth/idVerify.ts` 在写入之前校验（`id_hash` 的 UNIQUE 索引是库级兜底）。
+ * 唯一性由 `domain/authService.submitRealName()` 在写入之前按当前用户判定
+ * （`id_hash` 的 UNIQUE 索引是库级兜底）。
  */
 export const verifyRealName = (id: number, input: VerifyRealNameInput): void => {
   getDb()

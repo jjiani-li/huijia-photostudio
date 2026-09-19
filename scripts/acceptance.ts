@@ -355,11 +355,6 @@ const combosSatisfy = (predicate: (c: (typeof promptCases)[number]) => boolean):
   };
 };
 
-/**
- * 已登录请求（`tickets/T12` 的真实会话）：懒建一条 `DEV_USER` 的会话，受保护端点的直调都带上 `sid` cookie；
- * 建行时登记清理（§3 的「自带清理」）。
- */
-let sid: string | null = null;
 /** 各用户名的 `sid` 明文（`tickets/T19` 起需要不止一个用户：未实名 / 已实名 / 占用者）。 */
 const sessionTokens = new Map<number, string>();
 const cookieFor = (userId: number): string => {
@@ -370,21 +365,20 @@ const cookieFor = (userId: number): string => {
   cleanups.push(() => getDb().prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token)));
   return token;
 };
+
+/** 以指定用户身份构造进程内请求（受保护端点直调都带 `sid` cookie）。 */
 const requestWithUser = (userId: number, url: string, init: RequestInit = {}): NextRequest => {
   const headers = new Headers(init.headers);
   headers.set('cookie', `${SID_COOKIE}=${cookieFor(userId)}`);
   return new Request(url, { ...init, headers }) as unknown as NextRequest;
 };
-const authedRequest = (url: string, init: RequestInit = {}): NextRequest => {
-  if (sid === null) {
-    const token = createSession(DEV_USER).token;
-    sid = token;
-    cleanups.push(() => getDb().prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token)));
-  }
-  const headers = new Headers(init.headers);
-  headers.set('cookie', `${SID_COOKIE}=${sid}`);
-  return new Request(url, { ...init, headers }) as unknown as NextRequest;
-};
+
+/**
+ * 已登录请求（`tickets/T12` 的真实会话）：懒建一条 `DEV_USER` 的会话，受保护端点的直调都带上 `sid` cookie；
+ * 建行时登记清理（§3 的「自带清理」）。
+ */
+const authedRequest = (url: string, init: RequestInit = {}): NextRequest =>
+  requestWithUser(DEV_USER, url, init);
 
 const jsonRequest = (url: string, payload: unknown): NextRequest =>
   new Request(url, {
@@ -1968,10 +1962,15 @@ checks.push(
       const before = count('generations');
       const code = await codeOfCreate(() => createFor(anchorId, 2, userId));
       const after = count('generations');
+      // 顺序即契约：把「未确认」的锚点给未实名用户，仍必须是 REALNAME_REQUIRED —— 实名先于
+      // ANCHOR_NOT_CONFIRMED（409）与 CONSENT_REQUIRED（403）（`spec/03-接口契约.md` §3.5 第 1 步）。
+      const unconfirmed = makeSucceededAnchor(); // confirmed_by_user 默认 0，且无 consents
+      const precedence = await codeOfCreate(() => createFor(unconfirmed, 2, userId));
+      const afterPrecedence = count('generations');
       return {
-        ok: code === 'REALNAME_REQUIRED' && after === before,
-        expected: 'REALNAME_REQUIRED 且未产生 generations 行',
-        actual: `${code}，generations ${before}→${after}`,
+        ok: code === 'REALNAME_REQUIRED' && after === before && precedence === 'REALNAME_REQUIRED' && afterPrecedence === before,
+        expected: 'REALNAME_REQUIRED 且未产生 generations 行；顺序在 ANCHOR_NOT_CONFIRMED / CONSENT_REQUIRED 之前',
+        actual: `${code}（generations ${before}→${after}）；未确认锚点=${precedence}（generations ${before}→${afterPrecedence}）`,
       };
     },
   },
@@ -1979,22 +1978,25 @@ checks.push(
     id: 'RN-02',
     run: async () => {
       const userId = makeUnverifiedUser();
+      // 用小写写法提交：归一化后应与大写样例同一哈希（同一个证件号恒得同一个 id_hash）。
       const created = await realnamePost(userId, { realName: '张三', idNumber: REALNAME_ID_A.toLowerCase() });
       const row = realnameRow(userId);
       const expectedHash = createHash('sha256').update(REALNAME_ID_A, 'utf8').digest('hex');
-      // 重提同一证件号（唯一性冲突被拒）后，已落的哈希逐字符不变 ⇒ 同一输入恒得同一哈希。
-      await realnamePost(userId, { realName: '张三', idNumber: REALNAME_ID_A });
+      // 同一个用户重提同一证件号（另一种大小写写法）：幂等——哈希与实名时间都不动，也不是新的一次实名。
+      const again = await realnamePost(userId, { realName: '张三', idNumber: REALNAME_ID_A });
       const after = realnameRow(userId);
+      const audits = realnameAuditCount(userId);
       return {
         ok:
           created.status === 200 &&
+          again.status === 200 &&
           row.idHash === expectedHash &&
           row.idHash !== REALNAME_ID_A &&
           !row.raw.includes(REALNAME_ID_A) &&
-          after.idHash === row.idHash &&
-          after.verifiedAt === row.verifiedAt,
-        expected: 'id_hash = sha256(证件号) 且非明文；重提后不变',
-        actual: `status=${created.status} hash=${row.idHash === expectedHash} 非明文=${!row.raw.includes(REALNAME_ID_A)} 重提后不变=${after.idHash === row.idHash}`,
+          after.raw === row.raw &&
+          audits === 1,
+        expected: 'id_hash = sha256(归一化后的证件号) 且非明文；重提同一证件号得同一哈希、不改写',
+        actual: `首次=${created.status} 重提=${again.status} hash=${row.idHash === expectedHash} 非明文=${!row.raw.includes(REALNAME_ID_A)} 重提后整行不变=${after.raw === row.raw} 审计=${audits}`,
       };
     },
   },
@@ -2030,10 +2032,27 @@ checks.push(
       const audit = getDb()
         .prepare("SELECT target, created_at FROM audit_logs WHERE action = 'auth.realname' AND user_id = ?")
         .get(userId) as { target: string; created_at: string } | undefined;
-      // 校验失败（格式 + 唯一性）都不写审计。
+      // 校验失败（格式）不写审计，也不动已落的三列。
       await realnamePost(userId, { realName: '张3', idNumber: '123' });
-      const failed = await realnamePost(userId, { realName: '张三', idNumber: REALNAME_ID_C });
       const afterFailed = realnameAuditCount(userId);
+      const rowAfterFailed = realnameRow(userId);
+
+      // 同一事务：让审计那一笔必然失败（临时触发器），`users` 三列必须一起回滚。
+      const rollbackUser = makeUnverifiedUser();
+      getDb().exec(
+        `CREATE TEMP TRIGGER t19_fail_audit BEFORE INSERT ON audit_logs
+         WHEN NEW.action = 'auth.realname' BEGIN SELECT RAISE(ABORT, 'T19 injected'); END;`,
+      );
+      let injected: Response;
+      const originalError = console.error;
+      console.error = () => undefined; // 注入的失败由 `withErrorHandling` 记一条 unhandled error，这里不必打进验收输出
+      try {
+        injected = await realnamePost(rollbackUser, { realName: '张三', idNumber: REALNAME_ID_D });
+      } finally {
+        console.error = originalError;
+        getDb().exec('DROP TRIGGER t19_fail_audit');
+      }
+      const rolledBack = realnameRow(rollbackUser);
       return {
         ok:
           ok.status === 200 &&
@@ -2041,10 +2060,15 @@ checks.push(
           auditCount === 1 &&
           audit?.target === `user:${userId}` &&
           audit?.created_at === row.verifiedAt &&
-          failed.status === 400 &&
-          afterFailed === 1,
-        expected: "成功后恰 1 行 auth.realname（target=user:{id}，与 verified_at 同时刻）；校验失败不写",
-        actual: `status=${ok.status} 审计 ${before}→${auditCount}（失败后仍 ${afterFailed}）target=${String(audit?.target)} 同时刻=${audit?.created_at === row.verifiedAt}`,
+          afterFailed === 1 &&
+          rowAfterFailed.raw === row.raw &&
+          injected.status === 500 &&
+          rolledBack.realName === null &&
+          rolledBack.idHash === null &&
+          rolledBack.verifiedAt === null,
+        expected:
+          "成功后恰 1 行 auth.realname（target=user:{id}，与 verified_at 同时刻）；校验失败不写；审计写失败时 users 三列一起回滚（同一事务）",
+        actual: `status=${ok.status} 审计 ${before}→${auditCount}（失败后仍 ${afterFailed}）target=${String(audit?.target)} 同时刻=${audit?.created_at === row.verifiedAt} 失败未动库=${rowAfterFailed.raw === row.raw}；注入失败=${injected.status} 三列回滚=${rolledBack.realName === null && rolledBack.idHash === null && rolledBack.verifiedAt === null}`,
       };
     },
   },
@@ -2058,6 +2082,13 @@ checks.push(
       const badFields = await errorFields(bad);
       const wrongFormat = await realnamePost(userId, { realName: '张三', idNumber: '123' });
       const wrongFields = await errorFields(wrongFormat);
+      // 请求字段名即契约：缺字段 / 非字符串 / 换错键名都必须被点上名（`spec/03-接口契约.md` §3.1）。
+      const missing = await realnamePost(userId, {});
+      const missingFields = await errorFields(missing);
+      const wrongType = await realnamePost(userId, { realName: 123, idNumber: null });
+      const wrongTypeFields = await errorFields(wrongType);
+      const wrongKeys = await realnamePost(userId, { name: '张三', id: REALNAME_ID_D });
+      const wrongKeysFields = await errorFields(wrongKeys);
       const ok = await realnamePost(userId, { realName: '张三', idNumber: REALNAME_ID_D });
       const okRaw = JSON.stringify(await ok.json());
       const after = await realnameGet(userId);
@@ -2078,6 +2109,12 @@ checks.push(
           badFields.keys.join(',') === 'idNumber,realName' &&
           wrongFormat.status === 400 &&
           wrongFields.keys.join(',') === 'idNumber' &&
+          missing.status === 400 &&
+          missingFields.keys.join(',') === 'idNumber,realName' &&
+          wrongType.status === 400 &&
+          wrongTypeFields.keys.join(',') === 'idNumber,realName' &&
+          wrongKeys.status === 400 &&
+          wrongKeysFields.keys.join(',') === 'idNumber,realName' &&
           ok.status === 200 &&
           after.status === 200 &&
           afterBody.realNameStatus.verified === true &&
@@ -2085,8 +2122,8 @@ checks.push(
           typeof afterBody.realNameStatus.verifiedAt === 'string' &&
           leaks.length === 0,
         expected:
-          'GET 未实名 {verified:false,verifiedAt:null,realName:null}；POST 成功 200 且响应无证件号明文与三个列名；空值 / 格式错 → 400 fields',
-        actual: `GET=${fresh.status} 键=${Object.keys(freshBody.realNameStatus).sort().join(',')} 空值=${bad.status}/${badFields.keys.join(',')} 格式=${wrongFormat.status}/${wrongFields.keys.join(',')} POST=${ok.status} 已实名=${String(afterBody.realNameStatus.verified)} 泄漏=${leaks.join(',') || '(无)'}`,
+          'GET 未实名 {verified:false,verifiedAt:null,realName:null}；POST 成功 200 且响应无证件号明文与三个列名；空值 / 格式错 / 缺字段 / 非字符串 / 换键名 → 400 且 details.fields 点名契约字段',
+        actual: `GET=${fresh.status} 键=${Object.keys(freshBody.realNameStatus).sort().join(',')} 空值=${bad.status}/${badFields.keys.join(',')} 格式=${wrongFormat.status}/${wrongFields.keys.join(',')} 缺字段=${missingFields.keys.join(',')} 非字符串=${wrongTypeFields.keys.join(',')} 换键名=${wrongKeysFields.keys.join(',')} POST=${ok.status} 已实名=${String(afterBody.realNameStatus.verified)} 泄漏=${leaks.join(',') || '(无)'}`,
       };
     },
   },

@@ -1,10 +1,4 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { closeDb, getDb } from '../db/connection';
-import { runMigrations } from '../db/migrate';
-import { runSeed } from '../db/seed';
+import { afterAll, describe, expect, it } from 'vitest';
 import { AppError } from '../domain/errors';
 import {
   getIdVerifyProvider,
@@ -19,28 +13,17 @@ import {
 
 /**
  * 实名校验通道（`docs/prd/modules/M08-账号历史与彻底删除.md` §2.2、`docs/prd/spec/06-合规与风控.md` §5.2）：
- * 格式校验（姓名 + 证件号长度与校验位）、唯一性校验、`id_hash = sha256(证件号)` 且不落明文、
- * `ID_VERIFY_PROVIDER=real` 是生产留空位（抛 `INTERNAL`）。
+ * 姓名与证件号的格式校验（长度与校验位）、`id_hash = sha256(归一化后的证件号)` 且不落明文、
+ * `ID_VERIFY_PROVIDER=real` 是生产留空位（抛 `INTERNAL`）。唯一性要当前用户身份，属 `domain/authService`。
+ * 本文件不碰数据库（`verify()` 是纯函数），端点侧另有 `app/api/me/realname/routes.test.ts`。
  */
-let tmpDir: string;
 
 /** 三个格式合法、校验位正确的样本（`11010519491231002X` 是 GB 11643 的公开样例）。 */
 const VALID_IDS = ['11010519491231002X', '310101199001011234', '440305198506200074'];
 
-beforeAll(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'huijia-idverify-'));
-  process.env.DATABASE_PATH = path.join(tmpDir, 'app.db');
-  closeDb();
-  runMigrations();
-  runSeed();
-});
-
 afterAll(() => {
-  closeDb();
   resetIdVerifyProvider();
-  delete process.env.DATABASE_PATH;
   delete process.env.ID_VERIFY_PROVIDER;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 const codeAndFields = (fn: () => unknown): { code: string; fields: Record<string, string[]> } => {
@@ -55,15 +38,7 @@ const codeAndFields = (fn: () => unknown): { code: string; fields: Record<string
   }
 };
 
-const insertUserWithHash = (id: number, idHash: string): void => {
-  getDb()
-    .prepare(
-      `INSERT INTO users (id, phone, nickname, real_name, id_hash, verified_at, status, daily_image_quota, created_at)
-       VALUES (?, ?, '已实名', '张三', ?, '2026-01-01T00:00:00.000Z', 1, 20, '2026-01-01T00:00:00.000Z')`,
-    )
-    .run(id, `1391000${String(id).padStart(4, '0')}`, idHash);
-};
-
+/** 姓名：2–20 个中日韩文字 / 拉丁字母（可含间隔号与半角空格），数字、符号与控制字符不算。 */
 describe('格式校验（spec/06 §5.2 的「长度与校验位」）', () => {
   it('姓名：2–20 个中日韩文字 / 拉丁字母（可含间隔号与空格），数字与符号不算', () => {
     expect(isValidRealName('张三')).toBe(true);
@@ -73,6 +48,8 @@ describe('格式校验（spec/06 §5.2 的「长度与校验位」）', () => {
     expect(isValidRealName('')).toBe(false);
     expect(isValidRealName('张3')).toBe(false);
     expect(isValidRealName('张三@')).toBe(false);
+    expect(isValidRealName('张\t三')).toBe(false);
+    expect(isValidRealName('张\n三')).toBe(false);
     expect(isValidRealName('张'.repeat(21))).toBe(false);
   });
 
@@ -123,12 +100,11 @@ describe('LocalIdVerifyProvider', () => {
     expect(Object.keys(both.fields).sort()).toEqual(['idNumber', 'realName']);
   });
 
-  it('唯一性：id_hash 已被占用 → INVALID_PARAM（含同一个用户重复提交）', () => {
-    const id = VALID_IDS[2] as string;
-    insertUserWithHash(7, idHashOf(id));
-    const result = codeAndFields(() => new LocalIdVerifyProvider().verify({ realName: '李四', idNumber: id }));
-    expect(result.code).toBe('INVALID_PARAM');
-    expect(Object.keys(result.fields)).toEqual(['idNumber']);
+  it('唯一性不在这里判（需要当前用户身份）：同证件号两次 verify 都出结果', () => {
+    const provider = new LocalIdVerifyProvider();
+    const first = provider.verify({ realName: '张三', idNumber: VALID_IDS[2] as string });
+    const second = provider.verify({ realName: '张三', idNumber: VALID_IDS[2] as string });
+    expect(second.idHash).toBe(first.idHash);
   });
 });
 

@@ -168,15 +168,31 @@ export const readRealNameStatus = (userId: number): RealNameStatus => {
 };
 
 /**
- * `POST /api/me/realname`（`modules/M08` §2.2、`RN-04`）：**先**过 `IdVerifyProvider`（格式 + 唯一性，
- * 失败抛 `INVALID_PARAM` 且不碰库），**再**在同一事务里写 `users` 三列与
- * `audit_logs(action='auth.realname')`（`target='user:{id}'`）——两者要么都写、要么都不写。
+ * `POST /api/me/realname`（`modules/M08` §2.2、`RN-03` / `RN-04`）：**先**过 `IdVerifyProvider`
+ * （姓名与证件号格式，失败抛 `INVALID_PARAM` 且不碰库），**再**在单事务里判唯一性 → 写 `users` 三列 →
+ * 写 `audit_logs(action='auth.realname')`（`target='user:{id}'`）——要么都写、要么都不写。
+ *
+ * 唯一性口径（`spec/03-接口契约.md` §3.1）：`id_hash` 已被**其他用户**占用 → `400 INVALID_PARAM`
+ * （`details.fields.idNumber`）；同一个用户重复提交同一证件号是**幂等**的（返回当前实名态、不改写、
+ * 不重复写审计）——`users.id_hash` 的 UNIQUE 索引是库级兜底，本地单进程内不会走到它。
  */
 export const submitRealName = (userId: number, req: IdVerifyRequest): RealNameStatus => {
   const verified = getIdVerifyProvider().verify(req);
+  const now = verified.verifiedAt;
   return getDb().transaction(() => {
+    const holder = users.findByIdHash(verified.idHash);
+    if (holder !== null && holder.id !== userId) {
+      throw appError('INVALID_PARAM', { fields: { idNumber: ['这个证件号已经实名过了'] } });
+    }
+    if (holder !== null) {
+      return {
+        verified: true,
+        verifiedAt: holder.verifiedAt,
+        realName: holder.realName,
+      };
+    }
     users.verifyRealName(userId, verified);
-    audit({ action: 'auth.realname', userId, target: `user:${userId}` }, verified.verifiedAt);
-    return { verified: true, verifiedAt: verified.verifiedAt, realName: verified.realName };
+    audit({ action: 'auth.realname', userId, target: `user:${userId}` }, now);
+    return { verified: true, verifiedAt: now, realName: verified.realName };
   })();
 };

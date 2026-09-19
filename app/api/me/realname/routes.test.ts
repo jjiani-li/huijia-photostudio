@@ -22,6 +22,8 @@ let tmpDir: string;
 /** 一个未实名的新用户（`verified_at IS NULL`）。 */
 let freshUserId = 0;
 let freshSid = '';
+/** 另一个已实名用户：`id_hash` 已被 `VALID_ID` 占用。 */
+let takenSid = '';
 let devSid = '';
 
 const VALID_ID = '11010519491231002X';
@@ -50,13 +52,14 @@ beforeEach(() => {
   freshUserId = fresh.id;
   freshSid = createSession(fresh.id).token;
 
-  // 已实名用户：`id_hash` 已被 `VALID_ID` 占用（唯一性冲突的对手）。
-  getDb()
+  // 已实名用户：`id_hash` 已被 `VALID_ID` 占用（唯一性冲突的对手，也是「同一个人重提」的样本）。
+  const taken = getDb()
     .prepare(
       `INSERT INTO users (phone, nickname, real_name, id_hash, verified_at, status, daily_image_quota, created_at)
        VALUES ('13900002222', '已实名', '李四', ?, ?, 1, 20, ?)`,
     )
     .run(idHashOf(VALID_ID), nowIso(), nowIso());
+  takenSid = createSession(Number(taken.lastInsertRowid)).token;
   devSid = createSession(1).token;
 });
 
@@ -155,6 +158,26 @@ describe('POST · 校验与落库（RN-02 / RN-04）', () => {
     expect(err.error.code).toBe('INVALID_PARAM');
     expect(Object.keys(err.error.details.fields)).toEqual(['idNumber']);
     expect(userRow(freshUserId)).toEqual(before);
+    expect(realnameAudits()).toBe(0);
+  });
+
+  it('同一用户重复提交同一证件号 → 200 且幂等（哈希 / 实名时间不变、不重复写审计）', async () => {
+    const first = await post(freshSid, { realName: '张三', idNumber: OTHER_VALID_ID });
+    expect(first.status).toBe(200);
+    const row = userRow(freshUserId);
+
+    // 换个大小写写法重提：归一化后是同一证件号 → 同一个哈希，不是新的一次实名。
+    const again = await post(freshSid, { realName: '张三', idNumber: OTHER_VALID_ID.toLowerCase() });
+    expect(again.status).toBe(200);
+    expect(userRow(freshUserId)).toEqual(row);
+    expect(realnameAudits()).toBe(1);
+  });
+
+  it('同一用户重提时以库里已登记的姓名为准（不改写）', async () => {
+    const res = await post(takenSid, { realName: '王五', idNumber: VALID_ID });
+    expect(res.status).toBe(200);
+    const status = realNameStatusSchema.parse(((await res.json()) as { realNameStatus: unknown }).realNameStatus);
+    expect(status.realName).toBe('李四');
     expect(realnameAudits()).toBe(0);
   });
 
