@@ -222,18 +222,8 @@ const storeImage = async (
   return { photoId: photo.id, bytes: marked };
 };
 
-/**
- * 撤销一张已转存的生成图（`modules/M07` §5.6）：内容审核判定为 `reject` 或审核失败时**软删**该
- * `kind='generated'` 行（磁盘文件由 `runPurge()` 清理），该张不计入产出 `n`。
- */
-const discardStoredImage = (photoId: number): void => {
-  softDeletePhoto(photoId, nowIso());
-};
-
-const toDataUri = (mime: string, bytes: Buffer): { mime: string; base64: string } => ({
-  mime,
-  base64: bytes.toString('base64'),
-});
+// 审核判定为 `reject` 或审核失败时，已转存的该张 `kind='generated'` 图立即**软删**
+// （`modules/M07` §5.6；磁盘文件由 `runPurge()` 清理），该张不计入产出 `n`。
 
 /**
  * 执行一个生成任务。`signal` 来自 worker 的 `JOB_TIMEOUT_SECONDS` 竞速（`spec/04` §4.6）。
@@ -306,29 +296,34 @@ export const runGenerateJob = async (generation: GenerationRecord, signal?: Abor
         continue;
       }
 
+      const mime = FORMAT_MIME[generation.params.outputFormat];
+      const base64 = stored.bytes.toString('base64');
+
       // ② 审核在前，硬闸门（`modules/M07` §5.6）：`reject` → 撤销该张及后续张的转存。
       let verdict: ModerationVerdict;
       try {
         verdict = await moderateResult({
           userId: generation.userId,
           generationId: generation.id,
-          image: toDataUri(FORMAT_MIME[generation.params.outputFormat], stored.bytes),
+          image: { mime, base64 },
         });
       } catch (err) {
-        // 审核失败（内部已重试 1 次）**不放过未审核的结果**：撤销该张、中止后续张，终态按 `n` 判定。
+        // 审核失败（内部已重试 1 次）：**不放过未审核的结果**——该张撤销、不计入 `n`，但**继续**处置后续张
+        // （`modules/M07` §6：只规定"该张不交付、终态按 `n` 判定"；"中止后续"专属于 `reject` 路径）。
         lastFailure = toFailure(err);
-        discardStoredImage(stored.photoId);
-        log('warn', '审核失败，撤销该张并中止后续', {
+        softDeletePhoto(stored.photoId, nowIso());
+        log('warn', '审核失败，撤销该张（继续处置后续）', {
           generationId: generation.id,
           ordinal: index,
           code: lastFailure.code,
           reason: lastFailure.raw.slice(0, CONTENT_LOG_LIMIT),
         });
-        break;
+        continue;
       }
       if (verdict === 'reject') {
+        // `reject` 是策略性终止：撤销该张，并中止该张及后续张的转存（`modules/M07` §5.6）。
         lastFailure = { code: 'CONTENT_REJECTED', raw: ERROR_MESSAGE.CONTENT_REJECTED, retryable: false };
-        discardStoredImage(stored.photoId);
+        softDeletePhoto(stored.photoId, nowIso());
         log('warn', '内容审核拒绝，撤销该张并中止后续', {
           generationId: generation.id,
           ordinal: index,
@@ -341,7 +336,7 @@ export const runGenerateJob = async (generation: GenerationRecord, signal?: Abor
       let ageDelta: number | null = null;
       try {
         const review = await eraReview({
-          image: `data:${FORMAT_MIME[generation.params.outputFormat]};base64,${stored.bytes.toString('base64')}`,
+          image: `data:${mime};base64,${base64}`,
           eraCode: generation.eraCode,
           sceneId: generation.sceneId,
           eraName: era?.name ?? generation.eraCode,

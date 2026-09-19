@@ -6,7 +6,7 @@ import { nowIso } from './time';
 import { buildKey, getStorage, type ImageExt } from '../storage';
 import { probeImage } from '../images/probe';
 import { audit } from '../security/audit';
-import { callModeration, moderateUpload, recordModeration } from '../security/moderation';
+import { callModeration, recordModeration } from '../security/moderation';
 import {
   findActiveOriginalBySha256,
   findActivePhotoForUser,
@@ -83,25 +83,33 @@ export const uploadPhoto = async (params: { userId: number; file: UploadFile }):
   // 同用户内内容去重：命中不落盘、不新增行，但仍调上传阶段审核并补写 content_reviews + audit_logs（deduped: true）。
   const existing = findActiveOriginalBySha256(userId, sha256);
   if (existing !== null) {
-    const dedupVerdict = await moderateUpload({
-      userId,
-      photoId: existing.id,
+    // 模型调用在事务外先跑完（异步），判定落库 + `photo.upload` 审计 + `reject` 软删放进**同一事务**
+    // （`modules/M01` §5.6 的去重分支要求），与下面的新建分支保持同一写法。
+    const dedupDecision = await callModeration({
+      stage: 'upload',
       image: { mime: existing.mime, base64: buffer.toString('base64') },
-      now: createdAt,
     });
-    audit(
-      {
-        action: 'photo.upload',
+    db.transaction(() => {
+      audit(
+        {
+          action: 'photo.upload',
+          userId,
+          target: `photo:${existing.id}`,
+          meta: { mime: existing.mime, bytes: existing.bytes, sha256, deduped: true },
+        },
+        createdAt,
+      );
+      recordModeration({
         userId,
-        target: `photo:${existing.id}`,
-        meta: { mime: existing.mime, bytes: existing.bytes, sha256, deduped: true },
-      },
-      createdAt,
-    );
-    if (dedupVerdict === 'reject') {
-      softDeletePhoto(existing.id, createdAt);
-      throw appError('CONTENT_REJECTED');
-    }
+        stage: 'upload',
+        targetType: 'photo',
+        targetId: existing.id,
+        decision: dedupDecision,
+        now: createdAt,
+      });
+      if (dedupDecision.verdict === 'reject') softDeletePhoto(existing.id, createdAt);
+    })();
+    if (dedupDecision.verdict === 'reject') throw appError('CONTENT_REJECTED');
     return existing;
   }
 

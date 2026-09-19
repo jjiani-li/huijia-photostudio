@@ -180,67 +180,84 @@ export const recordModeration = (params: RecordModerationParams): void => {
   })();
 };
 
-/**
- * `upload` 阶段（`POST /api/photos`，`modules/M07` §5.6）：审上传文件本身。
- * 判定为 `reject` 时由调用方软删 `photos` 行并返回 `422 CONTENT_REJECTED`。
- */
-export const moderateUpload = async (params: {
+/** 单阶段的完整流程：调上游 → 落库 → 返回判定（`modules/M07` §5.6）。 */
+interface ModerateParams {
   userId: number;
-  photoId: number;
-  image: { mime: string; base64: string };
+  stage: ModerationStage;
+  targetType: 'photo' | 'generation';
+  targetId: number;
+  call: CallModerationParams;
   now?: Iso;
-}): Promise<ModerationVerdict> => {
-  const decision = await callModeration({ stage: 'upload', image: params.image });
+}
+
+const moderate = async (params: ModerateParams): Promise<ModerationVerdict> => {
+  const decision = await callModeration(params.call);
   recordModeration({
     userId: params.userId,
-    stage: 'upload',
-    targetType: 'photo',
-    targetId: params.photoId,
+    stage: params.stage,
+    targetType: params.targetType,
+    targetId: params.targetId,
     decision,
     ...(params.now === undefined ? {} : { now: params.now }),
   });
   return decision.verdict;
 };
+
+/**
+ * `upload` 阶段（`POST /api/photos`，`modules/M07` §5.6）：审上传文件本身。
+ * 判定为 `reject` 时由调用方软删 `photos` 行并返回 `422 CONTENT_REJECTED`。
+ *
+ * 生产路径（`domain/photoService.ts`）为满足"三写同一事务"（`modules/M01` §5.6）直接用
+ * `callModeration()` + `recordModeration()`；本函数是**非事务版**的便捷入口（单测与将来无事务需求的调用方）。
+ */
+export const moderateUpload = (params: {
+  userId: number;
+  photoId: number;
+  image: { mime: string; base64: string };
+  now?: Iso;
+}): Promise<ModerationVerdict> =>
+  moderate({
+    userId: params.userId,
+    stage: 'upload',
+    targetType: 'photo',
+    targetId: params.photoId,
+    call: { stage: 'upload', image: params.image },
+    ...(params.now === undefined ? {} : { now: params.now }),
+  });
 
 /**
  * `prompt` 阶段（`POST /api/generations` 的"拼装完成 → 入队前"）：审拼装后的 prompt 全文。
  * `target_id` 用占位 `0` 并在 `reason` 前置 `prompt-stage`（`modules/M07` §9 待定决策 2，本期已决策）。
  */
-export const moderatePrompt = async (params: {
+export const moderatePrompt = (params: {
   userId: number;
   prompt: string;
   now?: Iso;
-}): Promise<ModerationVerdict> => {
-  const decision = await callModeration({ stage: 'prompt', text: params.prompt, reasonPrefix: 'prompt-stage' });
-  recordModeration({
+}): Promise<ModerationVerdict> =>
+  moderate({
     userId: params.userId,
     stage: 'prompt',
     targetType: 'generation',
     targetId: 0,
-    decision,
+    call: { stage: 'prompt', text: params.prompt, reasonPrefix: 'prompt-stage' },
     ...(params.now === undefined ? {} : { now: params.now }),
   });
-  return decision.verdict;
-};
 
 /**
  * `result` 阶段（worker 转存候选图之后，`modules/M07` §5.1 ②）：审生成图。
  * 判定为 `reject` 时由 handler 软删该张已转存的图、中止该张及后续张的转存。
  */
-export const moderateResult = async (params: {
+export const moderateResult = (params: {
   userId: number;
   generationId: number;
   image: { mime: string; base64: string };
   now?: Iso;
-}): Promise<ModerationVerdict> => {
-  const decision = await callModeration({ stage: 'result', image: params.image });
-  recordModeration({
+}): Promise<ModerationVerdict> =>
+  moderate({
     userId: params.userId,
     stage: 'result',
     targetType: 'generation',
     targetId: params.generationId,
-    decision,
+    call: { stage: 'result', image: params.image },
     ...(params.now === undefined ? {} : { now: params.now }),
   });
-  return decision.verdict;
-};
