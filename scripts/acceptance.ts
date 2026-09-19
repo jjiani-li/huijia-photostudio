@@ -51,6 +51,7 @@ import { dayKey, nowIso } from '../src/server/domain/time';
 import { reclaimStale } from '../src/jobs/worker';
 import { runGenerateJob } from '../src/jobs/handlers/generate';
 import { runPurge } from '../src/jobs/handlers/purge';
+import { anchorExtractHandler } from '../src/jobs/handlers/anchorExtract';
 import { heartbeatPath, writeHeartbeat } from '../src/jobs/heartbeat';
 import { SID_COOKIE, createSession, hashToken } from '../src/server/auth/session';
 import { promptReverseJobSchema } from '../src/shared/types';
@@ -67,6 +68,12 @@ import { GET as getPhotoFile } from '../app/api/photos/[id]/file/route';
 import { POST as postAuthCode } from '../app/api/auth/code/route';
 import { POST as postPhoto } from '../app/api/photos/route';
 import { GET as getRealName, POST as postRealName } from '../app/api/me/realname/route';
+import { POST as postPreprocess } from '../app/api/photos/[id]/preprocess/route';
+import { POST as postAnchor } from '../app/api/anchors/route';
+import { GET as getAnchor } from '../app/api/anchors/[id]/route';
+import { POST as postConfirm } from '../app/api/anchors/[id]/confirm/route';
+import { POST as postGeneration } from '../app/api/generations/route';
+import { GET as getGeneration } from '../app/api/generations/[id]/route';
 
 interface CheckResult {
   ok: boolean;
@@ -2128,6 +2135,238 @@ checks.push(
     },
   },
 );
+
+// ── `tickets/T15` 完整链路的后端段（`docs/prd/spec/07-验收标准.md` §2.4：E2E-01）──
+// 前端段（上传 → 身份确认界面）由 A 层组件测试覆盖（`docs/prd/pages/P01-上传与身份确认.md` §7），
+// 本检查只跑 API 链路：上传真实样例 → preprocess → 建锚点 → 提取 → confirm →
+// 生成 E4×S3 count=2 → 跑生成 handler → 历史可见 → 下载可读；自带清理见 §3。
+
+/** `E2E-01` 的输入样本（`docs/prd/spec/07-验收标准.md` §2.4；可用性已由 `PRE-09` 标定）。 */
+const E2E_SAMPLE_PHOTO = 'docs/老照片/1b26e45303c7321fa589d4525b43aa0.jpg';
+
+/** 删掉本次链路新建的 `photos` 行与磁盘文件（含上传阶段写过审核行的原图）。 */
+const purgePhotos = (ids: number[]): void => {
+  for (const id of ids) {
+    const row = getDb().prepare('SELECT storage_key FROM photos WHERE id = ?').get(id) as
+      | { storage_key: string }
+      | undefined;
+    if (row !== undefined) {
+      try {
+        fs.rmSync(getStorage().resolveAbs(row.storage_key), { force: true });
+      } catch {
+        /* 文件已被清理也不影响判定 */
+      }
+    }
+    getDb().prepare('DELETE FROM audit_logs WHERE target = ?').run(`photo:${id}`);
+    getDb()
+      .prepare("DELETE FROM content_reviews WHERE target_type = 'photo' AND target_id = ?")
+      .run(id);
+    getDb().prepare('DELETE FROM photos WHERE id = ?').run(id);
+  }
+};
+
+checks.push({
+  id: 'E2E-01',
+  run: async () => {
+    // 生成链路的额度预扣会撞满 DEV_USER 的默认上限（T09/T10 的用例不回收），先抬高上限并快照回滚。
+    raiseQuotaForGenerationChecks();
+    snapshotUsage();
+
+    const photosBefore = new Set(
+      (getDb().prepare('SELECT id FROM photos').all() as { id: number }[]).map((row) => row.id),
+    );
+    const generationsBefore = new Set(
+      (getDb().prepare('SELECT id FROM generations').all() as { id: number }[]).map((row) => row.id),
+    );
+    let anchorId: number | null = null;
+
+    const cleanup = (): void => {
+      for (const id of (getDb().prepare('SELECT id FROM generations').all() as { id: number }[])
+        .map((row) => row.id)
+        .filter((id) => !generationsBefore.has(id))) {
+        purgeGeneration(id);
+      }
+      if (anchorId !== null) {
+        getDb().prepare('DELETE FROM consents WHERE anchor_id = ?').run(anchorId);
+        getDb().prepare('DELETE FROM audit_logs WHERE target = ?').run(`anchor:${anchorId}`);
+        hardDeleteAnchor(anchorId, DEV_USER);
+      }
+      purgePhotos(
+        (getDb().prepare('SELECT id FROM photos').all() as { id: number }[])
+          .map((row) => row.id)
+          .filter((id) => !photosBefore.has(id)),
+      );
+    };
+    cleanups.push(cleanup);
+
+    const problems: string[] = [];
+    const steps: string[] = [];
+    const done = (): CheckResult => ({
+      ok: problems.length === 0,
+      expected:
+        '登入 → 上传样例 201 → preprocess → 建锚点 → 提取 succeeded → confirm → 生成 E4×S3 count=2 → succeeded(2 张) → 历史可见 → 下载图可解析宽高',
+      actual: problems.length === 0 ? `全链路无错误；${steps.join(' → ')}` : `${problems.join('；')}；${steps.join(' → ')}`,
+    });
+
+    try {
+      // ① 登入：DEV_USER 的会话（种子已实名，`migrations/001-init.sql`），受保护端点都带 `sid` cookie。
+      const me = await getMe(authedRequest('http://localhost/api/me'), { params: Promise.resolve({}) });
+      steps.push(`登入=${me.status}`);
+      if (me.status !== 200) {
+        problems.push(`登入返回 ${me.status}`);
+        return done();
+      }
+
+      // ② 上传真实样例（`multipart/form-data`，字段 `file`）。
+      const bytes = fs.readFileSync(E2E_SAMPLE_PHOTO);
+      const form = new FormData();
+      form.set('file', new File([new Uint8Array(bytes)], path.basename(E2E_SAMPLE_PHOTO), { type: 'image/jpeg' }));
+      const uploadRes = await postPhoto(
+        authedRequest('http://localhost/api/photos', { method: 'POST', body: form }),
+        { params: Promise.resolve({}) },
+      );
+      const originalId = ((await uploadRes.json()) as { photo?: { id?: number } }).photo?.id;
+      steps.push(`上传=${uploadRes.status}`);
+      if (uploadRes.status !== 201 || originalId === undefined) {
+        problems.push(`上传失败 ${uploadRes.status}`);
+        return done();
+      }
+
+      // ③ 预处理（幂等；`usable=false` 也 200，但锚点提取会判低质量 → 这里必须可用）。
+      const preRes = await postPreprocess(
+        authedRequest(`http://localhost/api/photos/${originalId}/preprocess`, { method: 'POST' }),
+        { params: Promise.resolve({ id: String(originalId) }) },
+      );
+      const preBody = (await preRes.json()) as { photo?: { id?: number }; quality?: { usable?: boolean } };
+      steps.push(`preprocess=${preRes.status}/usable=${String(preBody.quality?.usable)}`);
+      if (preRes.status !== 200 || preBody.photo?.id === undefined || preBody.quality?.usable !== true) {
+        problems.push('预处理未产出可用图');
+        return done();
+      }
+
+      // ④ 建锚点（`spec/03-接口契约.md` §3.3：`POST /api/anchors` 收 `photoIds`）。
+      const anchorRes = await postAnchor(
+        authedRequest('http://localhost/api/anchors', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ photoIds: [originalId] }),
+        }),
+        { params: Promise.resolve({}) },
+      );
+      const createdAnchor = ((await anchorRes.json()) as { anchor?: { id?: number; status?: string } }).anchor;
+      anchorId = createdAnchor?.id ?? null;
+      steps.push(`建锚点=${anchorRes.status}/${createdAnchor?.status ?? '-'}`);
+      if (anchorRes.status !== 202 || anchorId === null) {
+        problems.push(`建锚点失败 ${anchorRes.status}`);
+        return done();
+      }
+
+      // ⑤ 轮询至 `succeeded`：进程内没有真实 worker（`spec/03` §2.1），直接跑该行的 handler 再读端点。
+      const readAnchor = async (): Promise<{ status: string; anchorText: string | null }> => {
+        const res = await getAnchor(authedRequest(`http://localhost/api/anchors/${anchorId}`), {
+          params: Promise.resolve({ id: String(anchorId) }),
+        });
+        const anchor = ((await res.json()) as { anchor: { status: string; anchorText: string | null } }).anchor;
+        return { status: anchor.status, anchorText: anchor.anchorText };
+      };
+      let anchorDto = await readAnchor();
+      for (let tries = 0; tries < 5 && anchorDto.status !== 'succeeded' && anchorDto.status !== 'failed'; tries += 1) {
+        await anchorExtractHandler({ anchorId });
+        anchorDto = await readAnchor();
+      }
+      steps.push(`锚点=${anchorDto.status}`);
+      if (anchorDto.status !== 'succeeded' || anchorDto.anchorText === null || anchorDto.anchorText === '') {
+        problems.push(`锚点未到 succeeded（${anchorDto.status}）`);
+        return done();
+      }
+
+      // ⑥ 确认（两项授权缺一不可，`modules/M04` §5.1）。
+      const confirmRes = await postConfirm(
+        authedRequest(`http://localhost/api/anchors/${anchorId}/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirmed: true, consents: ['photo_usage', 'family_agreement'] }),
+        }),
+        { params: Promise.resolve({ id: String(anchorId) }) },
+      );
+      steps.push(`confirm=${confirmRes.status}`);
+      if (confirmRes.status !== 200) {
+        problems.push(`确认失败 ${confirmRes.status}`);
+        return done();
+      }
+
+      // ⑦ 生成 E4×S3 count=2。
+      const genRes = await postGeneration(
+        authedRequest('http://localhost/api/generations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ anchorId, eraCode: 'E4', sceneId: 3, count: 2 }),
+        }),
+        { params: Promise.resolve({}) },
+      );
+      const createdGeneration = ((await genRes.json()) as { generation?: { id?: number; status?: string } })
+        .generation;
+      const generationId = createdGeneration?.id;
+      steps.push(`生成=${genRes.status}/${createdGeneration?.status ?? '-'}`);
+      if (genRes.status !== 202 || generationId === undefined) {
+        problems.push(`建生成任务失败 ${genRes.status}`);
+        return done();
+      }
+
+      // ⑧ 轮询至 `succeeded`：同上，直接跑生成 handler 再读端点。
+      const readGeneration = async (): Promise<{ status: string; results: unknown[] }> => {
+        const res = await getGeneration(authedRequest(`http://localhost/api/generations/${generationId}`), {
+          params: Promise.resolve({ id: String(generationId) }),
+        });
+        const generation = ((await res.json()) as { generation: { status: string; results: unknown[] } })
+          .generation;
+        return { status: generation.status, results: generation.results };
+      };
+      let generationDto = await readGeneration();
+      for (
+        let tries = 0;
+        tries < 5 && generationDto.status !== 'succeeded' && !['failed', 'partial'].includes(generationDto.status);
+        tries += 1
+      ) {
+        const record = findGenerationById(generationId);
+        if (record !== null) await runGenerateJob(record);
+        generationDto = await readGeneration();
+      }
+      steps.push(`生成终态=${generationDto.status}/${generationDto.results.length} 张`);
+      if (generationDto.status !== 'succeeded' || generationDto.results.length !== 2) {
+        problems.push(`生成未到 succeeded 或结果不足 2 张（${generationDto.status}/${generationDto.results.length}）`);
+      }
+
+      // ⑨ 历史可见：该锚点与本次生成都要出现在 `/api/history`。
+      const history = await readHistory();
+      const item = history.items.find((entry) => entry.anchorId === anchorId);
+      const generationVisible = item?.generations.some((generation) => generation.id === generationId) ?? false;
+      steps.push(`历史可见=${item !== undefined}/${generationVisible}`);
+      if (item === undefined) problems.push('历史里没有该锚点');
+      else if (!generationVisible) problems.push('历史里没有本次生成');
+
+      // ⑩ 下载：结果图（`kind='generated'`）走 `GET /api/photos/:id/file`，`sharp` 必须解析出宽高。
+      const resultPhotoId = resultRows(generationId)[0]?.photo_id;
+      if (resultPhotoId === undefined) {
+        problems.push('没有结果图可下载');
+        return done();
+      }
+      const fileRes = await getPhotoFile(
+        authedRequest(`http://localhost/api/photos/${resultPhotoId}/file`),
+        { params: Promise.resolve({ id: String(resultPhotoId) }) },
+      );
+      const meta = await sharp(Buffer.from(await fileRes.arrayBuffer())).metadata();
+      steps.push(`下载=${fileRes.status}/${String(meta.width)}x${String(meta.height)}`);
+      if (fileRes.status !== 200 || typeof meta.width !== 'number' || typeof meta.height !== 'number') {
+        problems.push(`下载图不可读（${fileRes.status}/${String(meta.width)}x${String(meta.height)}）`);
+      }
+
+      return done();
+    } finally {
+      cleanup();
+    }
+  },
+});
 
 const main = async (): Promise<void> => {
   // `spec/07-验收标准.md` §2 前置：mock provider（未显式设置时默认 mock，避免 Windows 下 shell 前缀不通用）。

@@ -15,7 +15,9 @@ export function AuthGuard({ hasSession }: { hasSession: boolean }): null {
   const router = useRouter();
 
   useEffect(() => {
-    if (!hasSession) {
+    // `/` 首页是公开页（`docs/prd/pages/P01-上传与身份确认.md` §4.1）：软重定向只作用于本站其余页面
+    // （`pages/P00-设计基准与路由.md` §5.1 规则 ③ 的例外）；真实会话判据仍在各页的请求上。
+    if (!hasSession && pathname !== '/') {
       router.replace(`/login?next=${encodeURIComponent(pathname)}`);
     }
   }, [hasSession, pathname, router]);
