@@ -278,3 +278,95 @@ export const eraSceneConfigSchema = z.object({
   scenes: z.array(sceneOptionSchema),
   profiles: z.array(eraSceneProfileSchema),
 });
+
+// ── 生成 DTO（`docs/prd/spec/03-接口契约.md` §3.5、§4；E2E-04 / E2E-09 的形状来源）──────────
+
+/**
+ * 年代复核判定的取值域（`docs/prd/spec/06-合规与风控.md` §5.2、`modules/M07` §5）；
+ * 与内容审核判定（`ModerationVerdict`）是**两个词**，不得混用（`CONTEXT.md` 的「复核与审核」）。
+ */
+export type EraCheckVerdict = 'pass' | 'review' | 'reject';
+
+/** 结果图的年代复核快照（`generation_results.era_check_json`）：只标注不阻断（`ERA-01`）。 */
+export interface EraCheck {
+  passed: boolean;
+  verdict: EraCheckVerdict;
+  findings: Array<{ item: string; reason: string }>;
+  model: string | null;
+}
+
+export interface GenerationResult {
+  id: number;
+  photoId: number;
+  url: string;
+  width: number | null;
+  height: number | null;
+  seed: number | null;
+  eraCheck: EraCheck | null;
+  ageDelta: number | null;
+  realismScore: number | null;
+  userFeedback: 1 | -1 | -2 | null;
+}
+
+export interface Generation {
+  id: number;
+  status: 'queued' | 'running' | 'succeeded' | 'partial' | 'failed';
+  eraCode: string;
+  eraName: string;
+  sceneId: number;
+  sceneName: string;
+  requestedCount: number;
+  attempt: number;
+  prompt: string;
+  templateVersion: string;
+  params: { size: string; outputFormat: 'png' | 'jpeg'; watermark: boolean; provider: 'mock' | 'real' };
+  error: { code: string; message: string } | null;
+  createdAt: Iso;
+  finishedAt: Iso | null;
+  results: GenerationResult[];
+}
+
+export const eraCheckVerdictSchema = z.enum(['pass', 'review', 'reject']);
+
+export const eraCheckSchema = z.object({
+  passed: z.boolean(),
+  verdict: eraCheckVerdictSchema,
+  findings: z.array(z.object({ item: z.string(), reason: z.string() })),
+  model: z.string().nullable(),
+});
+
+export const generationResultSchema = z.object({
+  id: z.number().int(),
+  photoId: z.number().int(),
+  url: z.string(),
+  width: z.number().int().nullable(),
+  height: z.number().int().nullable(),
+  seed: z.number().int().nullable(),
+  eraCheck: eraCheckSchema.nullable(),
+  ageDelta: z.number().int().nullable(),
+  realismScore: z.number().nullable(),
+  userFeedback: z.union([z.literal(1), z.literal(-1), z.literal(-2)]).nullable(),
+});
+
+export const generationSchema = z.object({
+  id: z.number().int(),
+  status: z.enum(['queued', 'running', 'succeeded', 'partial', 'failed']),
+  eraCode: z.string(),
+  eraName: z.string(),
+  sceneId: z.number().int(),
+  sceneName: z.string(),
+  requestedCount: z.number().int(),
+  attempt: z.number().int(),
+  prompt: z.string(),
+  templateVersion: z.string(),
+  params: z.object({
+    size: z.string(),
+    outputFormat: z.enum(['png', 'jpeg']),
+    watermark: z.boolean(),
+    provider: z.enum(['mock', 'real']),
+  }),
+  error: anchorErrorSchema.nullable(),
+  createdAt: z.string(),
+  finishedAt: z.string().nullable(),
+  results: z.array(generationResultSchema),
+});

@@ -79,6 +79,62 @@ export const listByUser = (userId: number): PromptReverseJobRecord[] =>
       .all(userId) as PromptReverseJobRow[]
   ).map(toJob);
 
+/** worker 拉取：一次只取一行（`docs/prd/spec/04-技术基线与目录结构.md` §4.6）。 */
+export const findNextQueuedId = (): number | null => {
+  const row = getDb()
+    .prepare("SELECT id FROM prompt_reverse_jobs WHERE status = 'queued' ORDER BY created_at LIMIT 1")
+    .get() as { id: number } | undefined;
+  return row === undefined ? null : row.id;
+};
+
+/**
+ * 启动回收（§4.6）：陈旧 `running` 行退回 `queued`、`started_at = NULL`；
+ * `attempt` 保持不变、`error_code` 不写（`ERR-02`）。返回命中行数。
+ */
+export const requeueStale = (beforeIso: Iso): number =>
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `UPDATE prompt_reverse_jobs SET status = 'queued', started_at = NULL
+           WHERE status = 'running' AND started_at < @beforeIso`,
+        )
+        .run({ beforeIso }).changes,
+    )();
+
+/** 自动重试的入库（`spec/04` §4.6）：置回 `queued` 且 `attempt + 1`；`attempt` 只在重试时自增。 */
+export const requeueForRetry = (id: number, attempt: number, errorCode: string, errorMessage: string): void => {
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `UPDATE prompt_reverse_jobs SET status = 'queued', attempt = @attempt, error_code = @errorCode,
+                  error_message = @errorMessage, started_at = NULL, finished_at = NULL
+           WHERE id = @id`,
+        )
+        .run({ id, attempt, errorCode, errorMessage }),
+    )();
+};
+
+/** 落终态 `failed`（不可重试分支）：`attempt` 保持不变；`error_message` 存上游原文供排查。 */
+export const markTerminalFailure = (
+  id: number,
+  errorCode: string,
+  errorMessage: string,
+  finishedAt: Iso,
+): void => {
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `UPDATE prompt_reverse_jobs SET status = 'failed', error_code = @errorCode, error_message = @errorMessage,
+                  started_at = NULL, finished_at = @finishedAt
+           WHERE id = @id`,
+        )
+        .run({ id, errorCode, errorMessage, finishedAt }),
+    )();
+};
+
 export interface InsertPromptReverseJobInput {
   userId: number;
   sourcePhotoId: number;

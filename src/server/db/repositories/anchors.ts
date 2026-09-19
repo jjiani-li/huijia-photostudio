@@ -227,6 +227,35 @@ export const findNextQueuedId = (): number | null => {
 };
 
 /**
+ * 启动回收（§4.6）：陈旧 `running` 行退回 `queued`、`started_at = NULL`；
+ * `attempt` 保持不变、`error_code` 不写（`ERR-02`）。返回命中行数。
+ */
+export const requeueStale = (beforeIso: Iso): number =>
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `UPDATE identity_anchors SET status = 'queued', started_at = NULL
+           WHERE status = 'running' AND started_at < @beforeIso`,
+        )
+        .run({ beforeIso }).changes,
+    )();
+
+/** 自动重试的入库（`spec/04` §4.6）：置回 `queued` 且 `attempt + 1`；`attempt` 只在重试时自增。 */
+export const requeueForRetry = (id: number, attempt: number, errorCode: string, errorMessage: string): void => {
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `UPDATE identity_anchors SET status = 'queued', attempt = @attempt, error_code = @errorCode,
+                  error_message = @errorMessage, started_at = NULL, finished_at = NULL
+           WHERE id = @id`,
+        )
+        .run({ id, attempt, errorCode, errorMessage }),
+    )();
+};
+
+/**
  * `DELETE /api/anchors/:id` 的物理删除（`identity_anchors` 无 `deleted_at` 列，
  * `docs/prd/modules/M08-账号历史与彻底删除.md` §3.3）；返回命中行数。
  * 级联（generations / results / generated 照片 / 反推任务）归 `tickets/T13`。

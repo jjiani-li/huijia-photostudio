@@ -14,9 +14,16 @@ import type { NextRequest } from 'next/server';
 import { getDb } from '../src/server/db/connection';
 import { hardDeleteAnchor, insert as insertAnchor } from '../src/server/db/repositories/anchors';
 import { readEraSceneConfig } from '../src/server/db/repositories/config';
+import { insertPhoto } from '../src/server/db/repositories/photos';
+import { insert as insertReverseJob } from '../src/server/db/repositories/promptReverseJobs';
 import { readFixture } from '../src/server/ark/fixtures';
 import { confirmAnchor, revokeConsents } from '../src/server/domain/anchorService';
-import { assertAnchorGeneratable, MIN_SIZE_PIXELS } from '../src/server/domain/generationService';
+import {
+  assertAnchorGeneratable,
+  createGeneration,
+  MIN_SIZE_PIXELS,
+  retryGeneration,
+} from '../src/server/domain/generationService';
 import { buildPrompt, PROMPT_MAX_LENGTH, PROMPT_MIN_LENGTH } from '../src/server/prompt/build';
 import { SEED_VERSION } from '../src/server/prompt/versions';
 import {
@@ -29,8 +36,11 @@ import {
   SECTION_SCENE,
 } from '../src/server/prompt/template';
 import { AppError } from '../src/server/domain/errors';
-import { nowIso } from '../src/server/domain/time';
+import { dayKey, nowIso } from '../src/server/domain/time';
+import { reclaimStale } from '../src/jobs/worker';
+import { heartbeatPath, writeHeartbeat } from '../src/jobs/heartbeat';
 import { GET as getEraSceneConfig } from '../app/api/config/era-scene/route';
+import { GET as getHealth } from '../app/api/health/route';
 
 interface CheckResult {
   ok: boolean;
@@ -414,6 +424,329 @@ checks.push(
         ok: body.version === seed.version && body.version === SEED_VERSION,
         expected: `version=${seed.version}`,
         actual: `version=${String(body.version)}`,
+      };
+    },
+  },
+);
+
+// —— `tickets/T09` 生成编排（`docs/prd/modules/M06-生成编排.md` §5）：进程内直连 domain 层，不需 HTTP ——
+
+const healthRequest = { method: 'GET', nextUrl: { pathname: '/api/health' } } as unknown as NextRequest;
+
+interface HealthBody {
+  ok: boolean;
+  db: { ok: boolean; eras: number; scenes: number; profiles: number };
+  worker: { alive: boolean; lastSeenAt: string | null };
+}
+
+/** 进程内直调健康检查端点（与配置端点同一做法），供 `DB-07` / `ERR-04` 取响应体。 */
+const readHealthBody = async (): Promise<HealthBody> => {
+  const res = await getHealth(healthRequest, { params: Promise.resolve({}) });
+  return (await res.json()) as HealthBody;
+};
+
+/**
+ * 额度计数快照：脚本跑完按差额回滚（§3 的「自带清理」），不污染本地额度。
+ * 只在第一次调用时取快照（后续 check 的预扣都基于同一起点），必须在任何 `createGeneration` 之前调用。
+ */
+let usageSnapshotTaken = false;
+const snapshotUsage = (): void => {
+  if (usageSnapshotTaken) return;
+  usageSnapshotTaken = true;
+  const day = dayKey();
+  const row = getDb()
+    .prepare('SELECT generations, images FROM usage_counters WHERE user_id = ? AND day = ?')
+    .get(DEV_USER, day) as { generations: number; images: number } | undefined;
+  cleanups.push(() => {
+    getDb().prepare('DELETE FROM usage_counters WHERE user_id = ? AND day = ?').run(DEV_USER, day);
+    if (row !== undefined) {
+      getDb()
+        .prepare('INSERT INTO usage_counters (user_id, day, generations, images) VALUES (?, ?, ?, ?)')
+        .run(DEV_USER, day, row.generations, row.images);
+    }
+  });
+};
+
+/** 删掉本次创建的生成行与它带来的审计行。 */
+const deleteGenerations = (ids: number[]): void => {
+  for (const id of ids) {
+    getDb().prepare('DELETE FROM generation_results WHERE generation_id = ?').run(id);
+    getDb().prepare('DELETE FROM audit_logs WHERE target = ?').run(`generation:${id}`);
+    getDb().prepare('DELETE FROM generations WHERE id = ?').run(id);
+  }
+};
+
+const currentQuota = (): number =>
+  (getDb().prepare('SELECT daily_image_quota AS q FROM users WHERE id = ?').get(DEV_USER) as { q: number }).q;
+
+const setQuota = (limit: number): void => {
+  getDb().prepare('UPDATE users SET daily_image_quota = ? WHERE id = ?').run(limit, DEV_USER);
+};
+
+/** `reference_photo_ids` 用：一张 `kind='preprocessed'` 的行（不落盘，`E2E-04` 只看库）。 */
+let preprocessedPhotoId: number | null = null;
+const sharedPreprocessedPhoto = (): number => {
+  if (preprocessedPhotoId === null) {
+    const photo = insertPhoto({
+      userId: DEV_USER,
+      kind: 'preprocessed',
+      storageKey: `u${DEV_USER}/acceptance-preprocessed.jpg`,
+      mime: 'image/jpeg',
+      bytes: 1,
+      width: 1600,
+      height: 1200,
+      sha256: 'd'.repeat(64),
+      sourcePhotoId: null,
+      qualityJson: null,
+      createdAt: nowIso(),
+    });
+    preprocessedPhotoId = photo.id;
+    cleanups.push(() => {
+      getDb().prepare('DELETE FROM photos WHERE id = ?').run(photo.id);
+    });
+  }
+  return preprocessedPhotoId;
+};
+
+/** 可以走完 8 步的锚点：`succeeded` + 已确认 + `photo_usage` + 有 `anchor_text` + 预处理图。 */
+const makeReadyAnchor = (): number => {
+  const id = makeSucceededAnchor();
+  getDb()
+    .prepare(
+      `UPDATE identity_anchors SET preprocessed_photo_id = ?, confirmed_by_user = 1,
+              confirmed_at = ?, anchor_text = ? WHERE id = ?`,
+    )
+    .run(sharedPreprocessedPhoto(), nowIso(), ANCHOR_SAMPLE.anchorText, id);
+  getDb()
+    .prepare("INSERT INTO consents (user_id, scope, anchor_id, agreed_at) VALUES (?, 'photo_usage', ?, ?)")
+    .run(DEV_USER, id, nowIso());
+  return id;
+};
+
+const createFor = (anchorId: number, count: number) =>
+  createGeneration({ userId: DEV_USER, anchorId, eraCode: 'E2', sceneId: 1, count });
+
+const codeOfCreate = (fn: () => void): string => {
+  try {
+    fn();
+    return 'NO_THROW';
+  } catch (err) {
+    return err instanceof AppError ? err.code : `ERROR:${String(err)}`;
+  }
+};
+
+const HOUR_AGO = new Date(Date.now() - 3_600_000).toISOString();
+
+checks.push(
+  {
+    id: 'SEC-04',
+    run: () => {
+      const anchorId = makeReadyAnchor();
+      snapshotUsage();
+      const limit = currentQuota();
+      const before = count('generations');
+      try {
+        setQuota(1);
+        const code = codeOfCreate(() => createFor(anchorId, 2));
+        setQuota(limit);
+        const after = count('generations');
+        return {
+          ok: code === 'QUOTA_EXCEEDED' && after === before,
+          expected: 'QUOTA_EXCEEDED 且未产生 generations 行',
+          actual: `${code}，generations ${before}→${after}`,
+        };
+      } finally {
+        setQuota(limit);
+      }
+    },
+  },
+  {
+    id: 'SEC-05',
+    run: () => {
+      const anchorId = makeReadyAnchor();
+      snapshotUsage();
+      const created: number[] = [];
+      try {
+        const first = createFor(anchorId, 2);
+        created.push(first.id);
+        cleanups.push(() => deleteGenerations(created));
+        const code = codeOfCreate(() => createFor(anchorId, 2));
+        const rows = (
+          getDb().prepare('SELECT COUNT(*) AS n FROM generations WHERE id = ?').get(first.id) as { n: number }
+        ).n;
+        return {
+          ok: code === 'GENERATION_IN_PROGRESS' && rows === 1,
+          expected: 'GENERATION_IN_PROGRESS 且只留第一行',
+          actual: `${code}，第一行 ${rows} 条`,
+        };
+      } finally {
+        deleteGenerations(created);
+      }
+    },
+  },
+  {
+    id: 'E2E-04',
+    run: () => {
+      const anchorId = makeReadyAnchor();
+      snapshotUsage();
+      const created: number[] = [];
+      try {
+        const record = createFor(anchorId, 2);
+        created.push(record.id);
+        cleanups.push(() => deleteGenerations(created));
+        const photoId = record.referencePhotoIds[0];
+        const kind =
+          record.referencePhotoIds.length === 1 && photoId !== undefined
+            ? (getDb().prepare('SELECT kind FROM photos WHERE id = ?').get(photoId) as { kind: string } | undefined)
+                ?.kind
+            : undefined;
+        return {
+          ok: record.referencePhotoIds.length === 1 && kind === 'preprocessed',
+          expected: 'reference_photo_ids 恰 1 个 id 且该 photo kind=preprocessed',
+          actual: `n=${record.referencePhotoIds.length} kind=${String(kind)}`,
+        };
+      } finally {
+        deleteGenerations(created);
+      }
+    },
+  },
+  {
+    id: 'E2E-09',
+    run: () => {
+      const anchorId = makeReadyAnchor();
+      snapshotUsage();
+      const created: number[] = [];
+      try {
+        const first = createFor(anchorId, 2);
+        created.push(first.id);
+        cleanups.push(() => deleteGenerations(created));
+        getDb()
+          .prepare("UPDATE generations SET status = 'succeeded', finished_at = ? WHERE id = ?")
+          .run(nowIso(), first.id);
+        const beforeOld = JSON.stringify(
+          getDb().prepare('SELECT * FROM generations WHERE id = ?').get(first.id),
+        );
+
+        const second = retryGeneration({ userId: DEV_USER, generationId: first.id });
+        created.push(second.id);
+
+        const afterOld = JSON.stringify(getDb().prepare('SELECT * FROM generations WHERE id = ?').get(first.id));
+        const ok =
+          second.id !== first.id &&
+          second.status === 'queued' &&
+          second.attempt === 0 &&
+          second.requestedCount === first.requestedCount &&
+          second.anchorId === first.anchorId &&
+          afterOld === beforeOld;
+        return {
+          ok,
+          expected: '新行 attempt=0，旧行逐列不变',
+          actual: `new=${second.id}/${second.status}/attempt=${second.attempt}，旧行未变=${afterOld === beforeOld}`,
+        };
+      } finally {
+        deleteGenerations(created);
+      }
+    },
+  },
+  {
+    id: 'ERR-02',
+    run: () => {
+      const anchorId = makeReadyAnchor();
+      const created: number[] = [];
+      let jobId: number | null = null;
+      try {
+        // 先入队（此时锚点仍可生成），再把三张表各造一行「1 小时前的 running」。
+        snapshotUsage();
+        const generation = createFor(anchorId, 2);
+        created.push(generation.id);
+        cleanups.push(() => deleteGenerations(created));
+        getDb()
+          .prepare("UPDATE generations SET status = 'running', attempt = 1, started_at = ? WHERE id = ?")
+          .run(HOUR_AGO, generation.id);
+
+        getDb()
+          .prepare("UPDATE identity_anchors SET status = 'running', attempt = 2, started_at = ? WHERE id = ?")
+          .run(HOUR_AGO, anchorId);
+        const job = insertReverseJob({
+          userId: DEV_USER,
+          sourcePhotoId: sharedPreprocessedPhoto(),
+          model: 'acceptance-vision-model',
+          status: 'running',
+          attempt: 1,
+          createdAt: nowIso(),
+        });
+        jobId = job.id;
+        cleanups.push(() => {
+          getDb().prepare('DELETE FROM prompt_reverse_jobs WHERE id = ?').run(job.id);
+        });
+        getDb().prepare('UPDATE prompt_reverse_jobs SET started_at = ? WHERE id = ?').run(HOUR_AGO, job.id);
+
+        const reclaimed = reclaimStale(10);
+
+        const rows: Array<[string, number, number]> = [
+          ['identity_anchors', anchorId, 2],
+          ['prompt_reverse_jobs', job.id, 1],
+          ['generations', generation.id, 1],
+        ];
+        const bad = rows.filter(([table, id, attempt]) => {
+          const row = getDb()
+            .prepare(`SELECT status, started_at, attempt FROM ${table} WHERE id = ?`)
+            .get(id) as { status: string; started_at: string | null; attempt: number };
+          return row.status !== 'queued' || row.started_at !== null || row.attempt !== attempt;
+        });
+        return {
+          ok:
+            bad.length === 0 &&
+            reclaimed.anchors >= 1 &&
+            reclaimed.promptReverseJobs >= 1 &&
+            reclaimed.generations >= 1,
+          expected: '三张表的陈旧 running 都回到 queued（attempt 不变）',
+          actual:
+            bad.length === 0
+              ? `回收 ${
+                  reclaimed.anchors + reclaimed.promptReverseJobs + reclaimed.generations
+                } 行（锚点 ${reclaimed.anchors} / 反推 ${reclaimed.promptReverseJobs} / 生成 ${reclaimed.generations}）`
+              : `${bad.length} 张表未回收：${bad.map(([t]) => t).join(',')}`,
+        };
+      } finally {
+        deleteGenerations(created);
+        if (jobId !== null) getDb().prepare('DELETE FROM prompt_reverse_jobs WHERE id = ?').run(jobId);
+      }
+    },
+  },
+  {
+    id: 'ERR-04',
+    run: async () => {
+      const file = heartbeatPath();
+      const hadFile = fs.existsSync(file);
+      fs.rmSync(file, { force: true });
+      cleanups.push(() => {
+        if (hadFile) writeHeartbeat();
+        else fs.rmSync(file, { force: true });
+      });
+
+      const before = (await readHealthBody()).worker;
+      writeHeartbeat();
+      const after = (await readHealthBody()).worker;
+      return {
+        ok:
+          before.alive === false &&
+          before.lastSeenAt === null &&
+          after.alive === true &&
+          typeof after.lastSeenAt === 'string',
+        expected: '无心跳文件 alive=false / lastSeenAt=null；写入后 alive=true',
+        actual: `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
+      };
+    },
+  },
+  {
+    id: 'DB-07',
+    run: async () => {
+      const body = await readHealthBody();
+      return {
+        ok: body.db.eras === 4 && body.db.scenes === 5 && body.db.profiles === 20,
+        expected: 'db.eras / scenes / profiles = 4 / 5 / 20',
+        actual: `db.ok=${body.db.ok} eras=${body.db.eras} scenes=${body.db.scenes} profiles=${body.db.profiles}`,
       };
     },
   },

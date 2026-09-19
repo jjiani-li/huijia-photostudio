@@ -47,3 +47,21 @@ export const deduct = (userId: number, day: string, count: number): UsageCounter
     )();
   return getDay(userId, day);
 };
+
+/**
+ * 回滚未产出的张数（`modules/M06-生成编排.md` §5.6）：`images -= :unproduced`。
+ * `generations` 计数**不回滚**（任务确实发生了）；`unproduced <= 0` 时不执行语句。
+ * `day` 用入队日（`generations.created_at` 的 UTC 日期），跨天完成时不打错行。
+ */
+export const rollback = (userId: number, day: string, unproduced: number): number => {
+  if (unproduced <= 0) return 0;
+  return getDb()
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `UPDATE usage_counters SET images = images - @unproduced
+           WHERE user_id = @userId AND day = @day`,
+        )
+        .run({ userId, day, unproduced }).changes,
+    )();
+};

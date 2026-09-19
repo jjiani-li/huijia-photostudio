@@ -1,6 +1,6 @@
 import { getDb } from '../connection';
-import { idArrayJson, objectJson, parseRequiredJsonColumn } from '../json';
-import type { Iso } from '../../../shared/types';
+import { idArrayJson, objectJson, parseJsonColumn, parseRequiredJsonColumn } from '../json';
+import { eraCheckSchema, type EraCheck, type Iso } from '../../../shared/types';
 
 /**
  * `generations` 表 SQL（`docs/prd/spec/01-领域模型与数据库.md` §3.9、状态机 §2.2）。
@@ -98,6 +98,14 @@ export const findById = (id: number): GenerationRecord | null => {
   return row === undefined ? null : toGeneration(row);
 };
 
+/** 归属读（`GET /api/generations/:id`、retry 的原任务）：不是自己的资源一律 `null` → `404`。 */
+export const findByIdForUser = (userId: number, id: number): GenerationRecord | null => {
+  const row = getDb()
+    .prepare(`SELECT ${COLUMNS} FROM generations WHERE id = ? AND user_id = ?`)
+    .get(id, userId) as GenerationRow | undefined;
+  return row === undefined ? null : toGeneration(row);
+};
+
 export const listByUser = (userId: number): GenerationRecord[] =>
   (
     getDb()
@@ -184,3 +192,89 @@ export const updateStatus = (input: UpdateGenerationTerminalInput): void => {
         .run(input),
     )();
 };
+
+/** worker 拉取：一次只取一行（`docs/prd/spec/04-技术基线与目录结构.md` §4.6）。 */
+export const findNextQueuedId = (): number | null => {
+  const row = getDb()
+    .prepare("SELECT id FROM generations WHERE status = 'queued' ORDER BY created_at LIMIT 1")
+    .get() as { id: number } | undefined;
+  return row === undefined ? null : row.id;
+};
+
+/**
+ * 启动回收（§4.6）：`running` 且 `started_at` 早于阈值的行退回 `queued`、`started_at = NULL`；
+ * `attempt` 保持不变、`error_code` 不写（`ERR-02`）。返回命中行数。
+ */
+export const requeueStale = (beforeIso: Iso): number =>
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `UPDATE generations SET status = 'queued', started_at = NULL
+           WHERE status = 'running' AND started_at < @beforeIso`,
+        )
+        .run({ beforeIso }).changes,
+    )();
+
+// ── 结果行（`GET /api/generations/:id` 的 `results`；`spec/03-接口契约.md` §3.5）────────────
+
+export interface GenerationResultRecord {
+  id: number;
+  generationId: number;
+  photoId: number;
+  ordinal: number;
+  width: number | null;
+  height: number | null;
+  seed: number | null;
+  eraCheck: EraCheck | null;
+  ageDelta: number | null;
+  realismScore: number | null;
+  userFeedback: number | null;
+  createdAt: Iso;
+}
+
+interface GenerationResultRow {
+  id: number;
+  generation_id: number;
+  photo_id: number;
+  ordinal: number;
+  width: number | null;
+  height: number | null;
+  seed: number | null;
+  era_check_json: string | null;
+  age_delta: number | null;
+  realism_score: number | null;
+  user_feedback: number | null;
+  created_at: string;
+}
+
+const RESULT_COLUMNS =
+  'r.id, r.generation_id, r.photo_id, r.ordinal, r.seed, r.era_check_json, r.age_delta, r.realism_score, r.user_feedback, r.created_at, p.width, p.height';
+
+const toResult = (row: GenerationResultRow): GenerationResultRecord => ({
+  id: row.id,
+  generationId: row.generation_id,
+  photoId: row.photo_id,
+  ordinal: row.ordinal,
+  width: row.width,
+  height: row.height,
+  seed: row.seed,
+  eraCheck: parseJsonColumn(row.era_check_json, eraCheckSchema, 'generation_results.era_check_json'),
+  ageDelta: row.age_delta,
+  realismScore: row.realism_score,
+  userFeedback: row.user_feedback,
+  createdAt: row.created_at,
+});
+
+/** `ordinal` 升序；宽高取转存后实测的 `photos.width` / `photos.height`（`modules/M06` §5.9 ③）。 */
+export const listResultsByGeneration = (generationId: number): GenerationResultRecord[] =>
+  (
+    getDb()
+      .prepare(
+        `SELECT ${RESULT_COLUMNS} FROM generation_results r
+         JOIN photos p ON p.id = r.photo_id
+         WHERE r.generation_id = ?
+         ORDER BY r.ordinal ASC`,
+      )
+      .all(generationId) as GenerationResultRow[]
+  ).map(toResult);

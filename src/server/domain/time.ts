@@ -6,5 +6,9 @@
 /** UTC ISO-8601，毫秒精度，`Z` 结尾：`2026-09-17T15:07:42.000Z` */
 export const nowIso = (): string => new Date().toISOString();
 
+/** `nowIso()` 的派生入口：N 分钟前的 UTC ISO（worker 启动回收的阈值，`spec/04` §4.6）。 */
+export const isoMinutesAgo = (minutes: number): string =>
+  new Date(Date.now() - minutes * 60_000).toISOString();
+
 /** 额度日的「今天」，UTC：`YYYY-MM-DD` */
 export const dayKey = (): string => nowIso().slice(0, 10);
