@@ -20,7 +20,7 @@ const parseWidth = (raw: string | null): number | undefined => {
 
 /** `GET /api/photos/:id/file`（`docs/prd/spec/03-接口契约.md` §3.2）：二进制读图，可选 `?w=` 缩放。 */
 export const GET = withErrorHandling(async (req: NextRequest, ctx: RouteContext<{ id: string }>) => {
-  const user = requireUser();
+  const user = requireUser(req);
   const { id } = await ctx.params;
   const width = parseWidth(new URL(req.url).searchParams.get('w'));
   const { body, contentType, generated } = await readPhotoForUser({

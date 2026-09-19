@@ -15,7 +15,7 @@ const createAnchorSchema = z.object({
 });
 
 export const POST = withErrorHandling(async (req: NextRequest) => {
-  const user = requireUser();
+  const user = requireUser(req);
   const body = await parseJson(req, createAnchorSchema);
   const anchor = await createAnchor({
     userId: user.id,

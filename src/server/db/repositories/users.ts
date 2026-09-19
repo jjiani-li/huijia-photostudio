@@ -69,3 +69,42 @@ export const findByEmail = (email: string): UserRecord | null => {
     | undefined;
   return row === undefined ? null : toUser(row);
 };
+
+export interface InsertUserInput {
+  /** 归一化后的手机号（11 位纯数字）或邮箱（小写）；二者恰一个非空（`users` 的 CHECK）。 */
+  phone: string | null;
+  email: string | null;
+  nickname: string;
+  createdAt: string;
+}
+
+/** 首登建号（`docs/prd/modules/M08-账号历史与彻底删除.md` §2.1）：`daily_image_quota` 走表默认值 20。 */
+export const insertUser = (input: InsertUserInput): UserRecord => {
+  const db = getDb();
+  return db.transaction(() => {
+    const info = db
+      .prepare(
+        `INSERT INTO users (phone, email, nickname, status, created_at)
+         VALUES (@phone, @email, @nickname, 1, @createdAt)`,
+      )
+      .run(input);
+    const row = db.prepare(`SELECT ${COLUMNS} FROM users WHERE id = ?`).get(info.lastInsertRowid) as
+      | UserRow
+      | undefined;
+    if (row === undefined) throw new Error('users 插入后读回失败');
+    return toUser(row);
+  })();
+};
+
+/** 首登后按 `id` 落最终 `nickname`（`用户` + id 后 4 位，`modules/M08` §2.1）。 */
+export const updateNickname = (id: number, nickname: string): void => {
+  getDb()
+    .transaction(() => getDb().prepare('UPDATE users SET nickname = @nickname WHERE id = @id').run({ id, nickname }))();
+};
+
+export const touchLastLogin = (id: number, at: string): void => {
+  getDb()
+    .transaction(() =>
+      getDb().prepare('UPDATE users SET last_login_at = @at WHERE id = @id').run({ id, at }),
+    )();
+};

@@ -20,7 +20,7 @@ const createGenerationSchema = z.object({
 });
 
 export const POST = withErrorHandling(async (req: NextRequest) => {
-  const user = requireUser();
+  const user = requireUser(req);
   const body = await parseJson(req, createGenerationSchema);
   const generation = await createGeneration({
     userId: user.id,

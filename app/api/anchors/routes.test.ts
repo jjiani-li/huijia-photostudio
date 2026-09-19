@@ -11,6 +11,7 @@ import { runSeed } from '../../../src/server/db/seed';
 import { buildKey, getStorage, resetStorage } from '../../../src/server/storage';
 import { insertPhoto } from '../../../src/server/db/repositories/photos';
 import { nowIso } from '../../../src/server/domain/time';
+import { SID_COOKIE, createSession } from '../../../src/server/auth/session';
 import { readFixture } from '../../../src/server/ark/fixtures';
 import { anchorExtractHandler } from '../../../src/jobs/handlers/anchorExtract';
 import { POST } from './route';
@@ -53,7 +54,16 @@ afterAll(() => {
 });
 
 const ctx = <T extends Record<string, string>>(params: T) => ({ params: Promise.resolve(params) });
-const asReq = (req: Request) => req as unknown as NextRequest;
+/**
+ * 真实会话（`tickets/T12`）：所有请求统一带 `sid` cookie，等价于已登录的种子 DEV_USER。
+ * 会话行在首次调用时懒建一次；`beforeAll` 已跑过 `migrate` + `seed`。
+ */
+let sid: string | null = null;
+const asReq = (req: Request): NextRequest => {
+  sid ??= createSession(1).token;
+  req.headers.set('cookie', `${SID_COOKIE}=${sid}`);
+  return req as unknown as NextRequest;
+};
 const body = <T>(req: Request, payload: T): NextRequest =>
   asReq(new Request('http://localhost/api/anchors', {
     method: 'POST',

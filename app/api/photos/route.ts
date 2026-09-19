@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 
 /** `POST /api/photos`（`docs/prd/spec/03-接口契约.md` §3.2）：`multipart/form-data`，字段 `file`。 */
 export const POST = withErrorHandling(async (req: NextRequest) => {
-  const user = requireUser();
+  const user = requireUser(req);
   const form = await req.formData().catch(() => null);
   const file = form?.get('file');
   if (form === null || !(file instanceof File)) {

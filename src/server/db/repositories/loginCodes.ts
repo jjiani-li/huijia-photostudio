@@ -68,6 +68,31 @@ export const findLatestByIdentifier = (identifier: string): LoginCodeRecord | nu
   return row === undefined ? null : toLoginCode(row);
 };
 
+/** 登录用：该 `identifier` 最近一条 `purpose='login'` 记录（不存在即 `null` → `CODE_INVALID`）。 */
+export const findLatestLogin = (identifier: string): LoginCodeRecord | null => {
+  const row = getDb()
+    .prepare(
+      `SELECT ${COLUMNS} FROM login_codes WHERE identifier = ? AND purpose = 'login'
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(identifier) as LoginCodeRow | undefined;
+  return row === undefined ? null : toLoginCode(row);
+};
+
+/**
+ * 发码节流（`modules/M08` §3.4）：同 `identifier` 在 `since` 之后仍有**未消费**记录 → 命中。
+ * 比较用 `created_at` 的 ISO 字符串序（`nowIso()` 恒为同格式 UTC）。
+ */
+export const findRecentUnconsumed = (identifier: string, since: string): LoginCodeRecord | null => {
+  const row = getDb()
+    .prepare(
+      `SELECT ${COLUMNS} FROM login_codes WHERE identifier = ? AND consumed_at IS NULL AND created_at > ?
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(identifier, since) as LoginCodeRow | undefined;
+  return row === undefined ? null : toLoginCode(row);
+};
+
 export const consume = (id: number, consumedAt: string): void => {
   getDb()
     .transaction(() =>

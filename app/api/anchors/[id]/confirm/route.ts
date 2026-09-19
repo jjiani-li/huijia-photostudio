@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
  * 请求 `{ confirmed: true, consents: [...两项] }` → 写两项授权、置 `confirmed_by_user`、同事务两条审计。
  */
 export const POST = withErrorHandling(async (req: NextRequest, ctx: RouteContext<{ id: string }>) => {
-  const user = requireUser();
+  const user = requireUser(req);
   const { id } = await ctx.params;
   const body = await parseJson(req, confirmAnchorSchema);
   return ok(confirmAnchor(user.id, parsePositiveInt(id, 'id'), body.consents));

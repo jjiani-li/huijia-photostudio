@@ -51,8 +51,8 @@ const toProfileOption = (profile: EraSceneProfileRecord): EraSceneProfile => ({
   sampleUrl: profile.samplePhoto,
 });
 
-export const GET = withErrorHandling(async () => {
-  requireUser();
+export const GET = withErrorHandling(async (req: Request) => {
+  requireUser(req);
   const config = readEraSceneConfig();
   const body: EraSceneConfig = {
     version: SEED_VERSION,

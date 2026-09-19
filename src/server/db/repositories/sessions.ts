@@ -58,10 +58,17 @@ export const insert = (input: InsertSessionInput): SessionRecord => {
   })();
 };
 
-export const findActiveByTokenHash = (tokenHash: string): SessionRecord | null => {
+/**
+ * 会话查活（`modules/M08` §2.1）：`revoked_at IS NULL AND expires_at > now`；`now` 由调用方传
+ * 当前 `nowIso()`（不做定时清理，只在查询时判定过期）。命中返回会话行。
+ */
+export const findActiveByTokenHash = (tokenHash: string, now: string): SessionRecord | null => {
   const row = getDb()
-    .prepare(`SELECT ${COLUMNS} FROM sessions WHERE token_hash = ? AND revoked_at IS NULL`)
-    .get(tokenHash) as SessionRow | undefined;
+    .prepare(
+      `SELECT ${COLUMNS} FROM sessions
+       WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?`,
+    )
+    .get(tokenHash, now) as SessionRow | undefined;
   return row === undefined ? null : toSession(row);
 };
 
@@ -73,3 +80,12 @@ export const revoke = (id: number, revokedAt: string): void => {
         .run({ id, revokedAt }),
     )();
 };
+
+/** 登出（`modules/M08` §2.1）：按 `token_hash` 吊销未吊销行；明文 token 只在入口出现一次。 */
+export const revokeByTokenHash = (tokenHash: string, revokedAt: string): number =>
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare('UPDATE sessions SET revoked_at = @revokedAt WHERE token_hash = @tokenHash AND revoked_at IS NULL')
+        .run({ tokenHash, revokedAt }).changes,
+    )();

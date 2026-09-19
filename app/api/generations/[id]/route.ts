@@ -8,8 +8,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** `GET /api/generations/:id`（`docs/prd/spec/03-接口契约.md` §3.5）：非终态时 `results` 为已有部分。 */
-export const GET = withErrorHandling(async (_req: NextRequest, ctx: RouteContext<{ id: string }>) => {
-  const user = requireUser();
+export const GET = withErrorHandling(async (req: NextRequest, ctx: RouteContext<{ id: string }>) => {
+  const user = requireUser(req);
   const { id } = await ctx.params;
   return ok({ generation: readGenerationForUser(user.id, parsePositiveInt(id, 'id')) });
 });

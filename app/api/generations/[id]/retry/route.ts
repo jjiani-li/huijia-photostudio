@@ -8,8 +8,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** `POST /api/generations/:id/retry`（`docs/prd/spec/03-接口契约.md` §3.5）：**新行**，`attempt = 0`。 */
-export const POST = withErrorHandling(async (_req: NextRequest, ctx: RouteContext<{ id: string }>) => {
-  const user = requireUser();
+export const POST = withErrorHandling(async (req: NextRequest, ctx: RouteContext<{ id: string }>) => {
+  const user = requireUser(req);
   const { id } = await ctx.params;
   const generation = await retryGeneration({ userId: user.id, generationId: parsePositiveInt(id, 'id') });
   return ok({ generation: toGenerationDto(generation) }, 202);

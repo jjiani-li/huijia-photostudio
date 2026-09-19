@@ -48,8 +48,11 @@ import { dayKey, nowIso } from '../src/server/domain/time';
 import { reclaimStale } from '../src/jobs/worker';
 import { runGenerateJob } from '../src/jobs/handlers/generate';
 import { heartbeatPath, writeHeartbeat } from '../src/jobs/heartbeat';
+import { SID_COOKIE, createSession, hashToken } from '../src/server/auth/session';
 import { GET as getEraSceneConfig } from '../app/api/config/era-scene/route';
 import { GET as getHealth } from '../app/api/health/route';
+import { GET as getMe } from '../app/api/me/route';
+import { POST as postAuthCode } from '../app/api/auth/code/route';
 
 interface CheckResult {
   ok: boolean;
@@ -338,14 +341,34 @@ const combosSatisfy = (predicate: (c: (typeof promptCases)[number]) => boolean):
   };
 };
 
-/** 进程内直调配置端点（与 `tickets/T03` 的 `routes.test.ts` 同一做法），供 `API-06` / `DB-06` 取响应体。 */
-const configRequest = {
-  method: 'GET',
-  nextUrl: { pathname: '/api/config/era-scene' },
-} as unknown as NextRequest;
+/**
+ * 已登录请求（`tickets/T12` 的真实会话）：懒建一条 `DEV_USER` 的会话，受保护端点的直调都带上 `sid` cookie；
+ * 建行时登记清理（§3 的「自带清理」）。
+ */
+let sid: string | null = null;
+const authedRequest = (url: string, init: RequestInit = {}): NextRequest => {
+  if (sid === null) {
+    const token = createSession(DEV_USER).token;
+    sid = token;
+    cleanups.push(() => getDb().prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token)));
+  }
+  const headers = new Headers(init.headers);
+  headers.set('cookie', `${SID_COOKIE}=${sid}`);
+  return new Request(url, { ...init, headers }) as unknown as NextRequest;
+};
 
+const jsonRequest = (url: string, payload: unknown): NextRequest =>
+  new Request(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }) as unknown as NextRequest;
+
+/** 进程内直调配置端点（与 `tickets/T03` 的 `routes.test.ts` 同一做法），供 `API-06` / `DB-06` 取响应体。 */
 const readConfigResponse = async (): Promise<Record<string, unknown>> => {
-  const res = await getEraSceneConfig(configRequest, { params: Promise.resolve({}) });
+  const res = await getEraSceneConfig(authedRequest('http://localhost/api/config/era-scene'), {
+    params: Promise.resolve({}),
+  });
   return (await res.json()) as Record<string, unknown>;
 };
 
@@ -434,6 +457,104 @@ checks.push(
         expected: `version=${seed.version}`,
         actual: `version=${String(body.version)}`,
       };
+    },
+  },
+);
+
+// —— `tickets/T12` 账号、会话与额度（`modules/M08` §2.1、§5.1）：真实会话、脱敏、节流、devCode ——
+
+checks.push(
+  {
+    id: 'API-03',
+    run: async () => {
+      const res = await getMe(new Request('http://localhost/api/me') as unknown as NextRequest, {
+        params: Promise.resolve({}),
+      });
+      const body = (await res.json()) as { error?: { code?: string } };
+      return {
+        ok: res.status === 401 && body.error?.code === 'UNAUTHENTICATED',
+        expected: '未登录访问 /api/me → 401 UNAUTHENTICATED',
+        actual: `${res.status} ${body.error?.code ?? ''}`,
+      };
+    },
+  },
+  {
+    // `API-05` 的另一半（`/api/history` 响应无明文手机号/邮箱）随 `tickets/T13` 的该端点落地后补（见 T12 §Comments）。
+    id: 'API-05',
+    run: async () => {
+      const res = await getMe(authedRequest('http://localhost/api/me'), { params: Promise.resolve({}) });
+      const body = (await res.json()) as {
+        user?: { phone?: string | null; email?: string | null };
+        quota?: { limit?: number };
+      };
+      const phone = body.user?.phone ?? null;
+      const serialized = JSON.stringify(body);
+      const masked = phone === null || phone.includes('*');
+      const noPlain = !serialized.includes('13800000000');
+      const quotaOk = typeof body.quota?.limit === 'number';
+      return {
+        ok: res.status === 200 && masked && noPlain && quotaOk,
+        expected: '200；user.phone 含 * 且无明文；quota.limit 为数值',
+        actual: `status=${res.status} phone=${String(phone)} 无明文=${noPlain} limit=${String(body.quota?.limit)}`,
+      };
+    },
+  },
+  {
+    id: 'API-07',
+    run: async () => {
+      const identifier = '13700000001';
+      cleanups.push(() => getDb().prepare('DELETE FROM login_codes WHERE identifier = ?').run(identifier));
+      const first = await postAuthCode(jsonRequest('http://localhost/api/auth/code', { identifier }), {
+        params: Promise.resolve({}),
+      });
+      const second = await postAuthCode(jsonRequest('http://localhost/api/auth/code', { identifier }), {
+        params: Promise.resolve({}),
+      });
+      const body = (await second.json()) as { error?: { code?: string } };
+      return {
+        ok: first.status === 200 && second.status === 429 && body.error?.code === 'CODE_RATE_LIMITED',
+        expected: '60 秒内二次发码 → 429 CODE_RATE_LIMITED',
+        actual: `${first.status} → ${second.status} ${body.error?.code ?? ''}`,
+      };
+    },
+  },
+  {
+    id: 'SEC-07',
+    run: async () => {
+      const saved = process.env.SMS_PROVIDER;
+      const consoleId = '13700000002';
+      const realId = '13700000003';
+      cleanups.push(() =>
+        getDb().prepare('DELETE FROM login_codes WHERE identifier IN (?, ?)').run(consoleId, realId),
+      );
+      try {
+        process.env.SMS_PROVIDER = 'console';
+        const consoleRes = await postAuthCode(jsonRequest('http://localhost/api/auth/code', { identifier: consoleId }), {
+          params: Promise.resolve({}),
+        });
+        const consoleBody = (await consoleRes.json()) as { devCode?: string };
+
+        process.env.SMS_PROVIDER = 'real';
+        const realRes = await postAuthCode(jsonRequest('http://localhost/api/auth/code', { identifier: realId }), {
+          params: Promise.resolve({}),
+        });
+        const realBody = (await realRes.json()) as { error?: { code?: string } };
+        const realSerialized = JSON.stringify(realBody);
+
+        return {
+          ok:
+            consoleRes.status === 200 &&
+            /^\d{6}$/.test(consoleBody.devCode ?? '') &&
+            realRes.status === 500 &&
+            realBody.error?.code === 'INTERNAL' &&
+            !realSerialized.includes('devCode'),
+          expected: 'console → 200 带 devCode；real → 500 INTERNAL 且无 devCode',
+          actual: `console=${consoleRes.status}/${String(consoleBody.devCode)} real=${realRes.status}/${realBody.error?.code ?? ''} devCode 泄漏=${realSerialized.includes('devCode')}`,
+        };
+      } finally {
+        if (saved === undefined) delete process.env.SMS_PROVIDER;
+        else process.env.SMS_PROVIDER = saved;
+      }
     },
   },
 );

@@ -33,6 +33,49 @@ export type ErrorCode = (typeof ERROR_CODES)[number];
 /** ISO-8601 UTC 字符串，如 `2026-09-17T15:07:42.000Z` */
 export type Iso = string;
 
+/** 会话中的当前用户（`docs/prd/modules/M08-账号历史与彻底删除.md` §2.1）：不含 `createdAt` 与实名三列。 */
+export interface SessionUser {
+  id: number;
+  phone: string | null;
+  email: string | null;
+  nickname: string;
+  status: number;
+}
+
+/** `GET /api/me` 的 `user`（`docs/prd/spec/03-接口契约.md` §4）：`phone` / `email` 必须是脱敏后的值。 */
+export interface User {
+  id: number;
+  phone: string | null;
+  email: string | null;
+  nickname: string;
+  status: number;
+  createdAt: Iso;
+}
+
+/** `GET /api/me` 的 `quota`（`docs/prd/spec/03-接口契约.md` §4、`modules/M08` §3.1）。 */
+export interface Quota {
+  day: string;
+  images: number;
+  limit: number;
+  remaining: number;
+}
+
+export const userSchema = z.object({
+  id: z.number().int(),
+  phone: z.string().nullable(),
+  email: z.string().nullable(),
+  nickname: z.string(),
+  status: z.number().int(),
+  createdAt: z.string(),
+});
+
+export const quotaSchema = z.object({
+  day: z.string(),
+  images: z.number().int(),
+  limit: z.number().int(),
+  remaining: z.number().int(),
+});
+
 /** 错误响应的统一 envelope（`docs/prd/spec/03-接口契约.md` §1.3）；成功响应不用 envelope。 */
 export interface ApiError {
   error: {
