@@ -22,4 +22,4 @@ export const resetArk = (): void => {
 
 export * from './types';
 export * from './errors';
-export { arkVisionModel } from './real';
+export { arkVisionModel, arkImageModel } from './real';

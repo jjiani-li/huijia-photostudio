@@ -10,13 +10,14 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import type { NextRequest } from 'next/server';
 import { getDb } from '../src/server/db/connection';
 import { hardDeleteAnchor, insert as insertAnchor } from '../src/server/db/repositories/anchors';
 import { readEraSceneConfig } from '../src/server/db/repositories/config';
 import { readFixture } from '../src/server/ark/fixtures';
 import { confirmAnchor, revokeConsents } from '../src/server/domain/anchorService';
-import { assertAnchorGeneratable } from '../src/server/domain/generationService';
-import { buildPrompt } from '../src/server/prompt/build';
+import { assertAnchorGeneratable, MIN_SIZE_PIXELS } from '../src/server/domain/generationService';
+import { buildPrompt, PROMPT_MAX_LENGTH, PROMPT_MIN_LENGTH } from '../src/server/prompt/build';
 import { SEED_VERSION } from '../src/server/prompt/versions';
 import {
   SECTION_AGE,
@@ -29,6 +30,7 @@ import {
 } from '../src/server/prompt/template';
 import { AppError } from '../src/server/domain/errors';
 import { nowIso } from '../src/server/domain/time';
+import { GET as getEraSceneConfig } from '../app/api/config/era-scene/route';
 
 interface CheckResult {
   ok: boolean;
@@ -38,7 +40,7 @@ interface CheckResult {
 interface Check {
   id: string;
   dependsOn?: string[];
-  run(): CheckResult;
+  run(): CheckResult | Promise<CheckResult>;
 }
 
 const EXPECTED_TABLES = [
@@ -60,16 +62,12 @@ const EXPECTED_TABLES = [
   'audit_logs',
 ].sort();
 
-const MIN_SIZE_PIXELS = 3_686_400;
 const CONFIDENCE_HINT = 0.6;
 const NEGATION_RE = /不要|禁止|不得出现|no\s/;
 /** `PR-03` 的判定正则（`docs/prd/spec/07-验收标准.md` §2.2，含 `without`）。 */
 const PROMPT_NEGATION_RE = /不要|禁止|no\s|without/;
 /** `PR-05` 的彩色正向词（E1 不得出现）。 */
 const PROMPT_COLOR_RE = /彩色胶卷|彩色颗粒|色彩/;
-/** `PR-07` 的长度区间（唯一声明在 `docs/prd/spec/07-验收标准.md` §2.2）。 */
-const PROMPT_MIN = 200;
-const PROMPT_MAX = 1200;
 /** `PR-01` 的 6 个固定段落标签（顺序即 `PR-02` 的递增顺序）。 */
 const PROMPT_SECTIONS = [
   SECTION_IDENTITY,
@@ -321,6 +319,17 @@ const combosSatisfy = (predicate: (c: (typeof promptCases)[number]) => boolean):
   };
 };
 
+/** 进程内直调配置端点（与 `tickets/T03` 的 `routes.test.ts` 同一做法），供 `API-06` / `DB-06` 取响应体。 */
+const configRequest = {
+  method: 'GET',
+  nextUrl: { pathname: '/api/config/era-scene' },
+} as unknown as NextRequest;
+
+const readConfigResponse = async (): Promise<Record<string, unknown>> => {
+  const res = await getEraSceneConfig(configRequest, { params: Promise.resolve({}) });
+  return (await res.json()) as Record<string, unknown>;
+};
+
 checks.push(
   {
     id: 'PR-01',
@@ -353,7 +362,8 @@ checks.push(
   },
   {
     id: 'PR-07',
-    run: () => combosSatisfy((c) => c.out.prompt.length >= PROMPT_MIN && c.out.prompt.length <= PROMPT_MAX),
+    run: () =>
+      combosSatisfy((c) => c.out.prompt.length >= PROMPT_MIN_LENGTH && c.out.prompt.length <= PROMPT_MAX_LENGTH),
   },
   {
     id: 'PR-08',
@@ -371,28 +381,45 @@ checks.push(
   {
     id: 'PR-09',
     run: () =>
-      combosSatisfy((c) =>
-        c.profile.promptOverride === null
-          ? !c.out.prompt.includes(SECTION_PROFILE)
-          : c.out.prompt.endsWith(SECTION_PROFILE + c.profile.promptOverride),
-      ),
+      combosSatisfy((c) => {
+        const override = c.profile.promptOverride;
+        // `null` 或全空白都整段省略（`docs/prd/modules/M05-年代场景配置与Prompt拼装.md` §5.1 规则 4）。
+        if (override === null || override.trim() === '') return !c.out.prompt.includes(SECTION_PROFILE);
+        return c.out.prompt.endsWith(SECTION_PROFILE + override);
+      }),
+  },
+  {
+    id: 'API-06',
+    run: async () => {
+      const body = await readConfigResponse();
+      const serialized = JSON.stringify(body);
+      const leaked = ['promptPack', 'spacePack', 'constraintPack', 'promptOverride'].filter((key) =>
+        serialized.includes(key),
+      );
+      return {
+        ok: leaked.length === 0,
+        expected: '0 命中 prompt 正文四字段',
+        actual: `${leaked.length} 命中${leaked.length > 0 ? ` ${leaked.join(',')}` : ''}`,
+      };
+    },
   },
   {
     id: 'DB-06',
-    run: () => {
+    run: async () => {
+      const body = (await readConfigResponse()) as { version?: unknown };
       const seed = JSON.parse(
         fs.readFileSync(path.resolve(process.cwd(), 'docs/prd/spec/era-scene-seed.json'), 'utf8'),
       ) as { version: string };
       return {
-        ok: SEED_VERSION === seed.version,
+        ok: body.version === seed.version && body.version === SEED_VERSION,
         expected: `version=${seed.version}`,
-        actual: `SEED_VERSION=${SEED_VERSION}`,
+        actual: `version=${String(body.version)}`,
       };
     },
   },
 );
 
-const main = (): void => {
+const main = async (): Promise<void> => {
   // `spec/07-验收标准.md` §2 前置：mock provider（未显式设置时默认 mock，避免 Windows 下 shell 前缀不通用）。
   if (!process.env.PROVIDER) process.env.PROVIDER = 'mock';
   let passed = 0;
@@ -409,7 +436,7 @@ const main = (): void => {
       }
       let result: CheckResult;
       try {
-        result = check.run();
+        result = await check.run();
       } catch (err) {
         result = { ok: false, expected: '无异常', actual: err instanceof Error ? err.message : String(err) };
       }
@@ -436,4 +463,4 @@ const main = (): void => {
   process.exit(failed === 0 ? 0 : 1);
 };
 
-main();
+void main();

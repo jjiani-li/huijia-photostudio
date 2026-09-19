@@ -1,6 +1,7 @@
 import { findByIdForUser } from '../db/repositories/anchors';
 import { hasActiveScope } from '../db/repositories/consents';
 import type { EraRecord, EraSceneProfileRecord, SceneRecord } from '../db/repositories/config';
+import { arkImageModel } from '../ark';
 import { buildPrompt } from '../prompt/build';
 import { appError } from './errors';
 
@@ -47,6 +48,7 @@ export interface GenerationDraft {
   templateVersion: string;
   eraPackVersion: string;
   scenePackVersion: string;
+  model: string;
   params: GenerationParams;
 }
 
@@ -87,6 +89,7 @@ export const buildGenerationDraft = (input: {
     templateVersion: built.templateVersion,
     eraPackVersion: input.era.packVersion,
     scenePackVersion: input.scene.packVersion,
+    model: arkImageModel(),
     params: {
       size: input.era.defaultSize,
       outputFormat: 'png',

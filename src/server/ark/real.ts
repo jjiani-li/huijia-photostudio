@@ -17,7 +17,9 @@ export const arkVisionModel = (): string =>
   process.env.ARK_VISION_MODEL ?? 'doubao-seed-2-1-turbo-260628';
 /** 读图请求的 `max_tokens`（`docs/prd/modules/M03-身份锚点提取.md` §7 的代码内常量）。 */
 export const ANCHOR_MAX_TOKENS = 1200;
-const imageModel = (): string => process.env.ARK_IMAGE_MODEL ?? 'doubao-seedream-5-0-lite-260128';
+/** 生图模型名（`generations.model` 与 `images/generations` 的 `model` 取同一份，避免第二份默认值）。 */
+export const arkImageModel = (): string =>
+  process.env.ARK_IMAGE_MODEL ?? 'doubao-seedream-5-0-lite-260128';
 const timeoutMs = (): number => Number(process.env.ARK_TIMEOUT_SECONDS ?? 120) * 1000;
 
 interface ChatResponse {
@@ -100,7 +102,7 @@ export class RealArkProvider implements ArkProvider {
 
   async generateImage(request: ArkImageRequest): Promise<ArkImageResult> {
     const body: Record<string, unknown> = {
-      model: imageModel(),
+      model: arkImageModel(),
       prompt: request.prompt,
       image: request.images,
       size: request.size,
@@ -121,6 +123,6 @@ export class RealArkProvider implements ArkProvider {
     if (images.length === 0) {
       throw new ArkUpstreamError({ kind: 'http', errorCode: 'EmptyData', message: 'images/generations 未返回图片' });
     }
-    return { images, model: data.model ?? imageModel() };
+    return { images, model: data.model ?? arkImageModel() };
   }
 }

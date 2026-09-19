@@ -136,11 +136,12 @@ describe('buildGenerationDraft（modules/M05 §5.1–§5.3）', () => {
     expect(result.params.watermark).toBe(false);
   });
 
-  it('template_version=tpl-v1，两个 pack 版本取行值，prompt/hash 来自 buildPrompt', () => {
+  it('template_version=tpl-v1，两个 pack 版本取行值，model 取 ARK_IMAGE_MODEL 默认，prompt/hash 来自 buildPrompt', () => {
     const result = draft('一个老年男性的身份锚点描述，长度足够用于拼装');
     expect(result.templateVersion).toBe('tpl-v1');
     expect(result.eraPackVersion).toBe(era().packVersion);
     expect(result.scenePackVersion).toBe(getScene(1)?.packVersion);
+    expect(result.model).toBe('doubao-seedream-5-0-lite-260128');
     expect(result.promptHash).toMatch(/^[0-9a-f]{64}$/);
     expect(result.prompt.length).toBeGreaterThan(0);
   });
