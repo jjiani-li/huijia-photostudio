@@ -1,6 +1,6 @@
 import sharp from 'sharp';
 import { appError } from '../domain/errors';
-import { probeImage } from './probe';
+import { probeImage, toImageError } from './probe';
 import { CENTER_FACE_FLOOR, type AnalysisInput } from './quality';
 
 /**
@@ -26,19 +26,24 @@ export async function normalize(input: Buffer): Promise<NormalizeResult> {
   const long = Math.max(inputMeta.width ?? 0, inputMeta.height ?? 0);
   const resized = long >= LONG_EDGE;
   // 元数据剥离不需要额外一步：sharp 默认不保留元数据，禁止调用 .withMetadata() / .keepMetadata()。
-  const buffer = await sharp(input)
-    .rotate()
-    .pipelineColourspace('srgb16')
-    .toColourspace('srgb')
-    .resize({
-      width: LONG_EDGE,
-      height: LONG_EDGE,
-      fit: 'inside',
-      withoutEnlargement: true,
-      kernel: 'lanczos3',
-    })
-    .jpeg({ quality: 92, chromaSubsampling: '4:4:4', mozjpeg: false })
-    .toBuffer();
+  let buffer: Buffer;
+  try {
+    buffer = await sharp(input)
+      .rotate()
+      .pipelineColourspace('srgb16')
+      .toColourspace('srgb')
+      .resize({
+        width: LONG_EDGE,
+        height: LONG_EDGE,
+        fit: 'inside',
+        withoutEnlargement: true,
+        kernel: 'lanczos3',
+      })
+      .jpeg({ quality: 92, chromaSubsampling: '4:4:4', mozjpeg: false })
+      .toBuffer();
+  } catch (err) {
+    throw toImageError(err); // 失败去向统一由 probe.ts 的映射入口决定（M01 §6.4）
+  }
   const out = await probeImage(buffer);
   if (out.width === null || out.height === null) {
     throw appError('STORAGE_ERROR', { reason: '归一化输出缺少宽高' });

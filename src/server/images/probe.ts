@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import { appError } from '../domain/errors';
+import { AppError, appError } from '../domain/errors';
 
 /**
  * 图片探测（`docs/prd/modules/M01-照片资产与存储.md` §6.4 的失败分类表——本模块是全项目**唯一**
@@ -26,14 +26,20 @@ const FORMAT_MIME: Record<string, string> = {
 const DECODE_ERROR_RE =
   /unsupported|unrecogniz|unable to (open|decode)|not a (valid|known)|invalid|corrupt|premature|truncated/i;
 
+/** `sharp` 失败的唯一映射入口（`docs/prd/modules/M01-照片资产与存储.md` §6.4）：全项目只有这里决定去向。 */
+export const toImageError = (err: unknown): AppError => {
+  const reason = err instanceof Error ? err.message : String(err);
+  return DECODE_ERROR_RE.test(reason)
+    ? appError('INVALID_FILE_TYPE', { reason })
+    : appError('STORAGE_ERROR', { reason });
+};
+
 export const probeImage = async (buffer: Buffer): Promise<ProbeResult> => {
   let metadata: sharp.Metadata;
   try {
     metadata = await sharp(buffer).metadata();
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    if (DECODE_ERROR_RE.test(reason)) throw appError('INVALID_FILE_TYPE', { reason });
-    throw appError('STORAGE_ERROR', { reason });
+    throw toImageError(err);
   }
   return {
     width: metadata.width ?? null,

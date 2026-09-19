@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
+import { probeImage } from './probe';
 import { normalize } from './preprocess';
 
 /**
@@ -28,6 +29,7 @@ describe('PRE-01 EXIF 方向校正', () => {
 describe('PRE-02 元数据剥离', () => {
   it('输出 mime=image/jpeg，exif/icc/iptc/xmp 全部 undefined', async () => {
     const out = await normalize(await makeJpeg(300, 200));
+    expect((await probeImage(out.buffer)).mime).toBe('image/jpeg');
     const meta = await sharp(out.buffer).metadata();
     expect(meta.format).toBe('jpeg');
     expect(meta.exif).toBeUndefined();

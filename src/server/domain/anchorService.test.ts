@@ -92,4 +92,15 @@ describe('preprocessPhoto', () => {
     await expect(preprocessPhoto(2, original.id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
     await expect(preprocessPhoto(1, 999999)).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
+
+  it('并发调用不会把属主的 in-flight 结果泄漏给他人', async () => {
+    const original = await uploadPhoto({ userId: 1, file: asFile(await jpeg(880, 660)) });
+    const [owner, other] = await Promise.allSettled([
+      preprocessPhoto(1, original.id),
+      preprocessPhoto(2, original.id),
+    ]);
+    expect(owner.status).toBe('fulfilled');
+    expect(other.status).toBe('rejected');
+    if (other.status === 'rejected') expect(other.reason).toMatchObject({ code: 'NOT_FOUND' });
+  });
 });

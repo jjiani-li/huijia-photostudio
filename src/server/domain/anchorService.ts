@@ -24,13 +24,15 @@ export interface PreprocessResult {
   quality: Quality;
 }
 
-const inFlight = new Map<number, Promise<PreprocessResult>>();
+const inFlight = new Map<string, Promise<PreprocessResult>>();
 
 export const preprocessPhoto = (userId: number, photoId: number): Promise<PreprocessResult> => {
-  const running = inFlight.get(photoId);
+  // 键必须带 userId：只按 photoId 去重会让并发的他人请求拿到属主的 in-flight 结果（跨用户读取）。
+  const flightKey = `${userId}:${photoId}`;
+  const running = inFlight.get(flightKey);
   if (running !== undefined) return running;
-  const task = doPreprocess(userId, photoId).finally(() => inFlight.delete(photoId));
-  inFlight.set(photoId, task);
+  const task = doPreprocess(userId, photoId).finally(() => inFlight.delete(flightKey));
+  inFlight.set(flightKey, task);
   return task;
 };
 
