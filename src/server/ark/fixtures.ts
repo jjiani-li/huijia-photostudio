@@ -78,6 +78,22 @@ export const readSafetyReviewFixture = (): SafetyReviewFixture =>
   readFixture<SafetyReviewFixture>('ark/safety-review.json');
 
 /**
+ * 反推读图回放（`fixtures/ark/prompt-reverse.json`，`docs/prd/spec/08-本地开发指南.md` §5.1）：
+ * **形状取自上游真实返回体**（`choices[0].message.content` 是待解析的正文原文，
+ * 同层的 `reasoning_content` 必须被丢弃，见 `modules/M09-图片反推提示词.md` §5.1）。
+ */
+export interface PromptReverseFixture {
+  model: string;
+  choices: Array<{
+    finish_reason: string;
+    message: { role: string; content: string; reasoning_content?: string };
+  }>;
+}
+
+export const readPromptReverseFixture = (): PromptReverseFixture =>
+  readFixture<PromptReverseFixture>('ark/prompt-reverse.json');
+
+/**
  * 复核 case 的确定性选择（`modules/M07` §7.1）：① `switch.activeCaseId` 非空直接用；
  * ② 否则按 `match` 逐条匹配（`eraCode` 与 `sceneId` 同时相等），取第一条命中；③ 都不命中 → `defaultCaseId`。
  */

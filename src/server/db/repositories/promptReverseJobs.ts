@@ -1,11 +1,12 @@
 import { getDb } from '../connection';
 import { placeholders } from '../sql';
-import { objectJson, parseJsonColumn } from '../json';
-import type { Iso } from '../../../shared/types';
+import { parseJsonColumn } from '../json';
+import { promptReverseDetailSchema, type Iso, type PromptReverseDetail } from '../../../shared/types';
 
 /**
  * `prompt_reverse_jobs` 表 SQL（`docs/prd/spec/01-领域模型与数据库.md` §3.15、状态机 §2.4）。
- * 反推任务编排归 `tickets/T18`；`result_json` 的 zod 边界校验在 `tickets/T18` 补。
+ * 反推任务编排归 `tickets/T18`；`result_json` 的五键 zod 边界校验也在本文件的读回路径上
+ * （共用的 schema 定义在 `src/shared/types.ts`）。
  */
 export type ReverseJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 
@@ -14,7 +15,7 @@ export interface PromptReverseJobRecord {
   userId: number;
   sourcePhotoId: number;
   model: string;
-  result: unknown;
+  result: PromptReverseDetail | null;
   resultPrompt: string | null;
   suggestEraCode: string | null;
   suggestSceneId: number | null;
@@ -53,7 +54,7 @@ const toJob = (row: PromptReverseJobRow): PromptReverseJobRecord => ({
   userId: row.user_id,
   sourcePhotoId: row.source_photo_id,
   model: row.model,
-  result: parseJsonColumn(row.result_json, objectJson, 'prompt_reverse_jobs.result_json'),
+  result: parseJsonColumn(row.result_json, promptReverseDetailSchema, 'prompt_reverse_jobs.result_json'),
   resultPrompt: row.result_prompt,
   suggestEraCode: row.suggest_era_code,
   suggestSceneId: row.suggest_scene_id,
@@ -70,6 +71,14 @@ export const findById = (id: number): PromptReverseJobRecord | null => {
   const row = getDb().prepare(`SELECT ${COLUMNS} FROM prompt_reverse_jobs WHERE id = ?`).get(id) as
     | PromptReverseJobRow
     | undefined;
+  return row === undefined ? null : toJob(row);
+};
+
+/** `GET /api/prompt-reverse-jobs/:id` 用：他人或不存在一律读不到（`API-04`，不返回 403）。 */
+export const findByIdForUser = (userId: number, id: number): PromptReverseJobRecord | null => {
+  const row = getDb()
+    .prepare(`SELECT ${COLUMNS} FROM prompt_reverse_jobs WHERE id = ? AND user_id = ?`)
+    .get(id, userId) as PromptReverseJobRow | undefined;
   return row === undefined ? null : toJob(row);
 };
 
@@ -129,7 +138,41 @@ export const requeueForRetry = (id: number, attempt: number, errorCode: string, 
     )();
 };
 
-/** 落终态 `failed`（不可重试分支）：`attempt` 保持不变；`error_message` 存上游原文供排查。 */
+/**
+ * 落终态 `succeeded`（`modules/M09-图片反推提示词.md` §3）：`result_json` / `result_prompt` 非空，
+ * 推荐值可空（越界已在 handler 归一为 `null`）。`error_code` / `error_message` 不写。
+ */
+export interface MarkSucceededInput {
+  id: number;
+  result: PromptReverseDetail;
+  resultPrompt: string;
+  suggestEraCode: string | null;
+  suggestSceneId: number | null;
+  finishedAt: Iso;
+}
+
+export const markSucceeded = (input: MarkSucceededInput): void => {
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `UPDATE prompt_reverse_jobs SET status = 'succeeded', result_json = @resultJson,
+                  result_prompt = @resultPrompt, suggest_era_code = @suggestEraCode,
+                  suggest_scene_id = @suggestSceneId, finished_at = @finishedAt
+           WHERE id = @id`,
+        )
+        .run({
+          id: input.id,
+          resultJson: JSON.stringify(input.result),
+          resultPrompt: input.resultPrompt,
+          suggestEraCode: input.suggestEraCode,
+          suggestSceneId: input.suggestSceneId,
+          finishedAt: input.finishedAt,
+        }),
+    )();
+};
+
+/** 落终态 `failed`（不可重试分支）：`attempt` 保持不变；`error_message` 存用户可见文案供排查。 */
 export const markTerminalFailure = (
   id: number,
   errorCode: string,
@@ -175,12 +218,9 @@ export const insert = (input: InsertPromptReverseJobInput): PromptReverseJobReco
 };
 
 /**
- * 批量物理 DELETE（`modules/M08` §3.3：反推任务按 `user_id` + `source_photo_id` 级联），返回命中行数。
- * `runPurge()` 的批次（软删照片 id）与两个 `DELETE` 端点的受影响照片集合都走这里。
- */
-/**
- * 批量物理 DELETE（`modules/M08` §3.3、§5.3）：反推任务按 `source_photo_id` 级联。
- * 传 `userId` 时再加归属过滤（两个 `DELETE` 端点用）；`runPurge()` 的批次只按照片 id。
+ * 批量物理 DELETE（`docs/prd/modules/M08-账号历史与彻底删除.md` §3.3、§5.3）：反推任务按
+ * `source_photo_id` 级联，返回命中行数。传 `userId` 时再加归属过滤（两个 `DELETE` 端点用）；
+ * `runPurge()` 的批次（软删照片 id）只按照片 id。
  */
 export const hardDeleteBySourcePhotos = (photoIds: number[], userId?: number): number => {
   if (photoIds.length === 0) return 0;

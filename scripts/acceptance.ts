@@ -52,6 +52,10 @@ import { runGenerateJob } from '../src/jobs/handlers/generate';
 import { runPurge } from '../src/jobs/handlers/purge';
 import { heartbeatPath, writeHeartbeat } from '../src/jobs/heartbeat';
 import { SID_COOKIE, createSession, hashToken } from '../src/server/auth/session';
+import { promptReverseJobSchema } from '../src/shared/types';
+import { reversePromptHandler } from '../src/jobs/handlers/reversePrompt';
+import { POST as postReverseJob } from '../app/api/prompt-reverse-jobs/route';
+import { GET as getReverseJob } from '../app/api/prompt-reverse-jobs/[id]/route';
 import { GET as getEraSceneConfig } from '../app/api/config/era-scene/route';
 import { GET as getHealth } from '../app/api/health/route';
 import { GET as getMe } from '../app/api/me/route';
@@ -1572,6 +1576,225 @@ checks.push(
         ok: first.purged >= 1 && second.scanned === 0 && second.purged === 0,
         expected: '第二次 runPurge() 返回 scanned=0 / purged=0',
         actual: `第一次 purged=${first.purged}，第二次 scanned=${second.scanned} purged=${second.purged}`,
+      };
+    },
+  },
+);
+
+// ── `tickets/T18` 图片反推提示词（`docs/prd/modules/M09-图片反推提示词.md` §9：API-08、REV-01–REV-03）──
+// 进程内直调两个端点与 handler，不经 HTTP；每个用例自带清理（反推行 + 照片行 + 磁盘文件）。
+
+/** `docs/prd/spec/03-接口契约.md` §4 的 `PromptReverseJob` 字段全集（多一个少一个都算漂移）。 */
+const REVERSE_JOB_KEYS = [
+  'createdAt',
+  'error',
+  'finishedAt',
+  'id',
+  'model',
+  'photoId',
+  'resultJson',
+  'resultPrompt',
+  'status',
+  'suggestEraCode',
+  'suggestSceneId',
+].sort();
+
+const encodeErrorCode = async (res: Response): Promise<string> =>
+  ((await res.json()) as { error?: { code?: string } }).error?.code ?? '';
+
+/** `POST /api/prompt-reverse-jobs`（可传任意请求体，供形状用例造非法输入）。 */
+const reversePost = (payload: unknown): Promise<Response> =>
+  postReverseJob(
+    authedRequest('http://localhost/api/prompt-reverse-jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    { params: Promise.resolve({}) },
+  );
+
+const reverseGet = (id: number): Promise<Response> =>
+  getReverseJob(authedRequest(`http://localhost/api/prompt-reverse-jobs/${id}`), {
+    params: Promise.resolve({ id: String(id) }),
+  });
+
+/** 建一张 `kind='generated'` 的行（`POST` 的 400 分支用），登记清理。 */
+const insertGeneratedPhoto = (): number => {
+  const photo = insertPhoto({
+    userId: DEV_USER,
+    kind: 'generated',
+    storageKey: `u${DEV_USER}/acceptance-generated.jpg`,
+    mime: 'image/jpeg',
+    bytes: 1,
+    width: 1024,
+    height: 1024,
+    sha256: 'e'.repeat(64),
+    sourcePhotoId: null,
+    qualityJson: null,
+    createdAt: nowIso(),
+  });
+  cleanups.push(() => getDb().prepare('DELETE FROM photos WHERE id = ?').run(photo.id));
+  return photo.id;
+};
+
+/** 入队一张反推任务并登记清理；返回 `jobId`。 */
+const enqueueReverse = async (photoId: number): Promise<number> => {
+  const res = await reversePost({ photoId });
+  if (res.status !== 202) throw new Error(`入队失败：${res.status} ${JSON.stringify(await res.json())}`);
+  const jobId = ((await res.json()) as { job: { id: number } }).job.id;
+  cleanups.push(() => getDb().prepare('DELETE FROM prompt_reverse_jobs WHERE id = ?').run(jobId));
+  return jobId;
+};
+
+const reverseRow = (jobId: number): Record<string, unknown> =>
+  getDb().prepare('SELECT * FROM prompt_reverse_jobs WHERE id = ?').get(jobId) as Record<string, unknown>;
+
+/** 跑通一条链路：真实文件的照片 → 入队 → handler → `GET`，返回响应里的 `job`。 */
+const runReverseOnce = async (): Promise<Record<string, unknown>> => {
+  const jobId = await enqueueReverse(await makePreprocessedWithFile());
+  await reversePromptHandler({ jobId });
+  return ((await (await reverseGet(jobId)).json()) as { job: Record<string, unknown> }).job;
+};
+
+checks.push(
+  {
+    id: 'API-08',
+    run: async () => {
+      const created = await reversePost({ photoId: sharedPreprocessedPhoto() });
+      const createdBody = (await created.json()) as { job?: Record<string, unknown> };
+      const job = createdBody.job ?? {};
+      const jobId = typeof job.id === 'number' ? job.id : null;
+      if (jobId !== null) {
+        cleanups.push(() => getDb().prepare('DELETE FROM prompt_reverse_jobs WHERE id = ?').run(jobId));
+      }
+
+      const read = await reverseGet(jobId ?? 0);
+      const readBody = (await read.json()) as { job?: Record<string, unknown> };
+      const readJob = readBody.job ?? {};
+
+      const declaredKeys = (record: Record<string, unknown>): boolean =>
+        JSON.stringify(Object.keys(record).sort()) === JSON.stringify(REVERSE_JOB_KEYS);
+      const envelopeOnly = (body: Record<string, unknown>): boolean => Object.keys(body).length === 1 && 'job' in body;
+
+      const invalid = await reversePost({});
+      const wrongType = await reversePost({ photoId: '1' });
+      const unknown = await reversePost({ photoId: 999_999 });
+      const generated = await reversePost({ photoId: insertGeneratedPhoto() });
+
+      const ok =
+        created.status === 202 &&
+        read.status === 200 &&
+        job.status === 'queued' &&
+        declaredKeys(job) &&
+        declaredKeys(readJob) &&
+        envelopeOnly(createdBody) &&
+        envelopeOnly(readBody) &&
+        promptReverseJobSchema.safeParse(job).success &&
+        promptReverseJobSchema.safeParse(readJob).success &&
+        invalid.status === 400 &&
+        wrongType.status === 400 &&
+        unknown.status === 404 &&
+        (await encodeErrorCode(unknown)) === 'NOT_FOUND' &&
+        generated.status === 400 &&
+        (await encodeErrorCode(generated)) === 'INVALID_PARAM';
+
+      return {
+        ok,
+        expected: `202/200；job 恰 ${REVERSE_JOB_KEYS.length} 键；缺参 400 / 照片不存在 404 / 结果图 400`,
+        actual: `202=${created.status} 200=${read.status} 键=${Object.keys(job).length}/${Object.keys(readJob).length} 缺参=${invalid.status} 类型错=${wrongType.status} 不存在=${unknown.status} 结果图=${generated.status}`,
+      };
+    },
+  },
+  {
+    id: 'REV-01',
+    run: async () => {
+      const job = await runReverseOnce();
+      const detail = (job.resultJson ?? {}) as Record<string, unknown>;
+      const fiveKeys = ['scene', 'lighting', 'era', 'wardrobe', 'composition'];
+      const keysOk = JSON.stringify(Object.keys(detail).sort()) === JSON.stringify([...fiveKeys].sort());
+      const allNonEmpty = fiveKeys.every(
+        (key) => typeof detail[key] === 'string' && (detail[key] as string).length > 0,
+      );
+      const promptOk = typeof job.resultPrompt === 'string' && job.resultPrompt.length > 0;
+      const shapeOk = promptReverseJobSchema.safeParse(job).success;
+      return {
+        ok: job.status === 'succeeded' && keysOk && allNonEmpty && promptOk && shapeOk,
+        expected: 'succeeded；五键非空 + resultPrompt 非空 + 形状走 shared schema',
+        actual: `status=${String(job.status)} 键=[${Object.keys(detail).sort().join(',')}] 全非空=${allNonEmpty} prompt=${promptOk} schema=${shapeOk}`,
+      };
+    },
+  },
+  {
+    id: 'REV-02',
+    run: async () => {
+      const job = await runReverseOnce();
+      const jobId = job.id as number;
+      const row = reverseRow(jobId);
+      const era = row.suggest_era_code as string | null;
+      const scene = row.suggest_scene_id as number | null;
+
+      const eraOk = era === null || (typeof era === 'string' && ['E1', 'E2', 'E3', 'E4'].includes(era));
+      const eraInTable = era === null || getDb().prepare('SELECT 1 FROM eras WHERE code = ?').get(era) !== undefined;
+      const sceneOk = scene === null || (Number.isInteger(scene) && scene > 0);
+      const sceneInTable =
+        scene === null || getDb().prepare('SELECT 1 FROM scenes WHERE id = ?').get(scene) !== undefined;
+
+      return {
+        ok: eraOk && eraInTable && sceneOk && sceneInTable,
+        expected: 'suggest_era_code ∈ {E1..E4}∪{NULL}；suggest_scene_id 为 INTEGER∪{NULL} 且落在 scenes.id',
+        actual: `era=${String(era)}（在 eras=${eraInTable}） scene=${String(scene)}（在 scenes=${sceneInTable}）`,
+      };
+    },
+  },
+  {
+    id: 'REV-03',
+    run: async () => {
+      // ① 重复反推 = 插新行，不覆盖旧行（`modules/M09` §3）。
+      const photoId = await makePreprocessedWithFile();
+      const first = await enqueueReverse(photoId);
+      const queuedRow = reverseRow(first);
+      const second = await enqueueReverse(photoId);
+      const secondQueued = reverseRow(second);
+
+      // ② queued → succeeded：产物与状态可查。
+      await reversePromptHandler({ jobId: first });
+      const succeededRow = reverseRow(first);
+      const succeededDto = (await (await reverseGet(first)).json()) as { job: Record<string, unknown> };
+
+      // ③ queued → failed：入队后源照片被软删，worker 落终态而不是把 AppError 抛出去。
+      const failingPhoto = await makePreprocessedWithFile();
+      const third = await enqueueReverse(failingPhoto);
+      getDb().prepare('UPDATE photos SET deleted_at = ? WHERE id = ?').run(nowIso(), failingPhoto);
+      await reversePromptHandler({ jobId: third });
+      const failedRow = reverseRow(third);
+      const failedDto = (await (await reverseGet(third)).json()) as {
+        job: { status: string; error: { code: string; message: string } | null };
+      };
+
+      const ok =
+        first !== second &&
+        queuedRow.status === 'queued' &&
+        queuedRow.result_json === null &&
+        // 旧行逐列不变（仍是 queued、无产物）
+        secondQueued.status === 'queued' &&
+        succeededRow.status === 'succeeded' &&
+        succeededRow.started_at !== null &&
+        typeof succeededRow.result_json === 'string' &&
+        typeof succeededRow.result_prompt === 'string' &&
+        succeededRow.finished_at !== null &&
+        failedRow.status === 'failed' &&
+        failedRow.error_code === 'INTERNAL' &&
+        typeof failedRow.error_message === 'string' &&
+        failedRow.error_message !== '' &&
+        failedDto.job.status === 'failed' &&
+        failedDto.job.error !== null &&
+        failedDto.job.error.code === 'INTERNAL' &&
+        typeof failedDto.job.error.message === 'string';
+
+      return {
+        ok,
+        expected: 'queued → succeeded（产物可查）；另起一行 queued → failed（error_code / error_message 非空）；重复反推插新行',
+        actual: `ids=${first}/${second} queued=${String(queuedRow.status)}→决定 succeeded=${String(succeededRow.status)} 产物=${typeof succeededRow.result_json}/${typeof succeededRow.result_prompt} failed=${String(failedRow.status)}/${String(failedRow.error_code)} 新行未动=${String(secondQueued.status)}`,
       };
     },
   },

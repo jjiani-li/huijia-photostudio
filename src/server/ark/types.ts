@@ -26,6 +26,23 @@ export interface AnchorExtractResult {
   model: string;
 }
 
+export interface PromptReverseInput {
+  /** 反推读图的图（本环节固定 1 张）。 */
+  images: ArkImageInput[];
+  /** 反推用的 system prompt 全文（`src/server/prompt/versions.ts` 的 `REVERSE_V1_SYSTEM_PROMPT`）。 */
+  systemPrompt: string;
+}
+
+export interface PromptReverseResult {
+  /**
+   * 上游助手正文原文（`choices[0].message.content`），**未解析**；`reasoning_content` 一律丢弃。
+   * 容错解析（剥包裹 / JSON.parse / 五键 / 推荐值域 / 词表）由 `jobs/handlers/reversePrompt.ts`
+   * 的 `parseReverseResponse` 按 `modules/M09-图片反推提示词.md` §5.4 执行。
+   */
+  raw: string;
+  model: string;
+}
+
 export interface ArkImageRequest {
   prompt: string;
   /** Base64 data URI 参考图。 */
@@ -93,6 +110,8 @@ export interface EraReviewResult {
 export interface ArkProvider {
   /** F1 读图：一次调用返回 `anchorText` + 12 键 `features`。 */
   extractAnchor(input: AnchorExtractInput): Promise<AnchorExtractResult>;
+  /** F4 反推读图（`modules/M09` §5.1）：返回正文原文，五键解析与推荐值域归一归 `jobs/handlers/reversePrompt.ts`。 */
+  reversePrompt(input: PromptReverseInput): Promise<PromptReverseResult>;
   /** 三阶段内容安全审核（`modules/M07` §5.6）；返回正文原文，判定与落库归 `security/moderation.ts`。 */
   reviewSafety(input: SafetyReviewInput): Promise<SafetyReviewResult>;
   /** 年代穿帮复核 + 年龄估计（`modules/M07` §5.2）；返回正文原文，归一归 `security/eraReview.ts`。 */

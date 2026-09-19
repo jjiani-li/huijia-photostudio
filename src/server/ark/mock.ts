@@ -4,6 +4,7 @@ import {
   readEraCheckFixture,
   readFailureFixture,
   readFixture,
+  readPromptReverseFixture,
   readSafetyReviewFixture,
   selectEraCheckCase,
   selectSafetyVariant,
@@ -17,6 +18,8 @@ import type {
   ArkProvider,
   EraReviewInput,
   EraReviewResult,
+  PromptReverseInput,
+  PromptReverseResult,
   SafetyReviewInput,
   SafetyReviewResult,
 } from './types';
@@ -71,6 +74,24 @@ export class MockArkProvider implements ArkProvider {
     const anchorText = fixture.anchorText.replace(/\d+\s*岁/, `${age} 岁`);
     // DTO 只回正文原文（`AnchorExtractResult.raw`）：容错解析与 12 键校验归 handler（`modules/M03` §5.5）。
     return { raw: JSON.stringify({ anchor: anchorText, features }), model: fixture.model };
+  }
+
+  async reversePrompt(input: PromptReverseInput): Promise<PromptReverseResult> {
+    const seed = hash(input.images.map((img) => img.base64).join('|'));
+    await delay(SLEEP_BASE_MS + (seed % SLEEP_SPAN_MS));
+
+    // 回放形状与上游真实返回体一致（含 `reasoning_content`）：只取正文原文，**丢弃**思考内容
+    // （`docs/prd/spec/08-本地开发指南.md` §5.1、`modules/M09-图片反推提示词.md` §5.1）。
+    const fixture = readPromptReverseFixture();
+    const message = fixture.choices[0]?.message;
+    if (message === undefined || typeof message.content !== 'string') {
+      throw new ArkUpstreamError({
+        kind: 'http',
+        errorCode: 'EmptyData',
+        message: 'prompt-reverse fixture 无 content',
+      });
+    }
+    return { raw: message.content, model: fixture.model };
   }
 
   async generateImage(request: ArkImageRequest, signal?: AbortSignal): Promise<ArkImageResult> {

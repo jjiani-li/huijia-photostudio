@@ -430,6 +430,56 @@ export const generationSchema = z.object({
   results: z.array(generationResultSchema),
 });
 
+// ── 图片反推 DTO（`docs/prd/spec/03-接口契约.md` §3.8、§4；`tickets/T18`）──────────────────
+
+/**
+ * `prompt_reverse_jobs.result_json` 的五键结构（`docs/prd/spec/05-Prompt工程.md` §11 的字段表）。
+ * 落库（repository 的边界校验）与上游返回解析（handler）共用这一份；多余键被 `.strip()` 丢弃。
+ */
+export const promptReverseDetailSchema = z
+  .object({
+    scene: z.string().min(1),
+    lighting: z.string().min(1),
+    era: z.string().min(1),
+    wardrobe: z.string().min(1),
+    composition: z.string().min(1),
+  })
+  .strip();
+
+export type PromptReverseDetail = z.infer<typeof promptReverseDetailSchema>;
+
+/**
+ * `POST` / `GET /api/prompt-reverse-jobs` 的 `job`（`docs/prd/spec/03-接口契约.md` §3.8、§4）：
+ * 非终态时四个产物字段为 `null`，`status='failed'` 时 `error` 非空（`code` 取自 `error_code` 列）。
+ */
+export interface PromptReverseJob {
+  id: number;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  photoId: number;
+  model: string;
+  resultJson: Record<string, unknown> | null;
+  resultPrompt: string | null;
+  suggestEraCode: string | null;
+  suggestSceneId: number | null;
+  error: { code: string; message: string } | null;
+  createdAt: Iso;
+  finishedAt: Iso | null;
+}
+
+export const promptReverseJobSchema = z.object({
+  id: z.number().int(),
+  status: z.enum(['queued', 'running', 'succeeded', 'failed']),
+  photoId: z.number().int(),
+  model: z.string(),
+  resultJson: z.record(z.string(), z.unknown()).nullable(),
+  resultPrompt: z.string().nullable(),
+  suggestEraCode: z.string().nullable(),
+  suggestSceneId: z.number().int().nullable(),
+  error: anchorErrorSchema.nullable(),
+  createdAt: z.string(),
+  finishedAt: z.string().nullable(),
+});
+
 // ── 历史链路 DTO（`docs/prd/spec/03-接口契约.md` §3.6、§4；`tickets/T13`）──────────────────
 
 /**

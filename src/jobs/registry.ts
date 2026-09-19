@@ -8,14 +8,13 @@ import { ERROR_MESSAGE } from '../server/domain/errors';
 import { nowIso } from '../server/domain/time';
 import { anchorExtractHandler } from './handlers/anchorExtract';
 import { failTimedOutGeneration, runGenerateJob } from './handlers/generate';
+import { failTimedOutReverseJob, reversePromptHandler } from './handlers/reversePrompt';
 
 /**
  * 任务类型 → handler 的映射，以及 worker 的三张任务表轮转来源
  * （`docs/prd/spec/04-技术基线与目录结构.md` §4.6 是唯一事实源）。
  *
- * 本文件只登记「有 handler 了吗」；`generations` 的 handler 由 `tickets/T10` 落成、
- * `prompt_reverse_jobs` 的由 `tickets/T18` 落成——届时分别补进 `JOB_HANDLERS` 即可，
- * 轮转顺序不因此改变。
+ * 三张任务表的 handler 已齐（`tickets/T06` / `tickets/T10` / `tickets/T18`），轮转顺序不因此改变。
  */
 export interface JobPayloads {
   'anchor.extract': { anchorId: number; signal: AbortSignal };
@@ -30,9 +29,10 @@ export type JobHandler<K extends JobType = JobType> = (job: JobPayloads[K]) => P
 /** 每个任务类型配它自己的 payload（不是把联合类型塞给单个 handler）。 */
 export type JobHandlerMap = { [K in JobType]?: JobHandler<K> };
 
-/** 只有落成 handler 的任务类型才出现在这里（`tickets/T10` / `tickets/T18` 追加）。 */
+/** 每个任务类型配它的 handler；三张任务表都已就位。 */
 export const JOB_HANDLERS: JobHandlerMap = {
   'anchor.extract': anchorExtractHandler,
+  'reverse.prompt': reversePromptHandler,
   generate: async ({ generationId, signal }) => {
     const record = findGenerationById(generationId);
     if (record !== null) await runGenerateJob(record, signal);
@@ -64,7 +64,7 @@ export const TASK_SOURCES: TaskSource[] = [
         finishedAt: nowIso(),
       }),
   },
-  { jobType: 'reverse.prompt', findNextQueuedId: findNextReverseJobId },
+  { jobType: 'reverse.prompt', findNextQueuedId: findNextReverseJobId, onTimeout: failTimedOutReverseJob },
   {
     jobType: 'generate',
     findNextQueuedId: findNextGenerationId,

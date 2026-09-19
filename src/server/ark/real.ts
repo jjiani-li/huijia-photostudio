@@ -7,6 +7,8 @@ import type {
   ArkProvider,
   EraReviewInput,
   EraReviewResult,
+  PromptReverseInput,
+  PromptReverseResult,
   SafetyReviewInput,
   SafetyReviewResult,
 } from './types';
@@ -106,6 +108,38 @@ export class RealArkProvider implements ArkProvider {
       throw new ArkUpstreamError({ kind: 'http', errorCode: 'EmptyData', message: 'chat/completions 未返回 content' });
     }
     // reasoning_content 一律丢弃；正文原文原样返回，六步容错解析归 handler（`modules/M03` §5.3 步骤 4、§5.5）。
+    return { raw: content, model: arkVisionModel() };
+  }
+
+  /**
+   * F4 反推读图（`modules/M09-图片反推提示词.md` §5.1）：与 `extractAnchor` 同一条多模态通路，
+   * `messages` 组装沿用 `modules/M03-身份锚点提取.md` §5.4（system 用字符串、user 的 text 在图片之前），
+   * 本环节固定 1 张图。正文原文原样返回，五键解析与推荐值域归一归 handler。
+   */
+  async reversePrompt(input: PromptReverseInput): Promise<PromptReverseResult> {
+    const data = (await postJson('/chat/completions', {
+      model: arkVisionModel(),
+      max_tokens: ANCHOR_MAX_TOKENS,
+      messages: [
+        { role: 'system', content: input.systemPrompt },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: '请描述这张老照片的场景、光线、年代、服饰与构图，并给出推荐的年代与场景。' },
+            ...input.images.map((img) => ({
+              type: 'image_url',
+              image_url: { url: `data:${img.mime};base64,${img.base64}` },
+            })),
+          ],
+        },
+      ],
+    })) as ChatResponse;
+
+    const content = data.choices?.[0]?.message?.content;
+    if (typeof content !== 'string') {
+      throw new ArkUpstreamError({ kind: 'http', errorCode: 'EmptyData', message: 'chat/completions 未返回 content' });
+    }
+    // 与 extractAnchor 一致：`reasoning_content` 一律丢弃（turbo 默认开启 thinking）。
     return { raw: content, model: arkVisionModel() };
   }
 

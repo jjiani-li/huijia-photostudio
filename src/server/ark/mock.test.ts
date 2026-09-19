@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ArkUpstreamError, mapArkError } from './errors';
+import { readPromptReverseFixture } from './fixtures';
 import { MOCK_UNKNOWN_SCENE_MARKER, MockArkProvider } from './mock';
 import type { ArkImageRequest } from './types';
 
@@ -118,5 +119,37 @@ describe('MockArkProvider.reviewEra', () => {
     const first = await provider.reviewEra(input({ eraCode: 'E2', sceneId: 3 }));
     const second = await provider.reviewEra(input({ eraCode: 'E2', sceneId: 3 }));
     expect(second.raw).toBe(first.raw);
+  });
+});
+
+describe('MockArkProvider.reversePrompt', () => {
+  const input = { images: [{ mime: 'image/jpeg', base64: 'AAAA' }], systemPrompt: 'sys' };
+
+  it('只回正文原文（五键 + result_prompt + 推荐值），确定性回放', async () => {
+    const provider = new MockArkProvider();
+    const first = await provider.reversePrompt(input);
+    const second = await provider.reversePrompt(input);
+    expect(second.raw).toBe(first.raw);
+    expect(Object.keys(JSON.parse(first.raw) as object).sort()).toEqual([
+      'composition',
+      'era',
+      'lighting',
+      'result_prompt',
+      'scene',
+      'suggest_era_code',
+      'suggest_scene_id',
+      'wardrobe',
+    ]);
+    expect(first.model).toBe('doubao-seed-2-1-turbo-260628');
+  });
+
+  it('样本里的 `reasoning_content` 被丢弃（正文里不得出现思考内容）', async () => {
+    const result = await new MockArkProvider().reversePrompt(input);
+    const fixture = readPromptReverseFixture();
+    const thinking = fixture.choices[0]?.message.reasoning_content ?? '';
+    expect(thinking).not.toBe('');
+    expect(result.raw).not.toContain(thinking);
+    // 正文本身仍是一个可解析的 JSON 对象。
+    expect(() => JSON.parse(result.raw)).not.toThrow();
   });
 });
