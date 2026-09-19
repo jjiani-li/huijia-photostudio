@@ -7,12 +7,13 @@ import { normalizeIdentifier, type IdentifierChannel } from '../auth/identifier'
 import { assertDevCodeAllowed, devLoginCode, exposeDevCode, getSmsSender } from '../auth/sms';
 import { createSession, destroySession, hashToken, readSessionToken } from '../auth/session';
 import { maskIdentifier, toApiUser } from '../auth/mask';
+import { getIdVerifyProvider, type IdVerifyRequest } from '../auth/idVerify';
 import { readQuota, type QuotaView } from '../security/quota';
 import * as loginCodes from '../db/repositories/loginCodes';
 import * as sessions from '../db/repositories/sessions';
 import * as users from '../db/repositories/users';
 import type { UserRecord } from '../db/repositories/users';
-import type { User } from '../../shared/types';
+import type { RealNameStatus, User } from '../../shared/types';
 
 /**
  * 验证码账号与会话的编排（`docs/prd/modules/M08-账号历史与彻底删除.md` §2.1）：
@@ -152,4 +153,30 @@ export const readMe = (userId: number): { user: User; quota: QuotaView } => {
   const user = users.findById(userId);
   if (user === null) throw appError('UNAUTHENTICATED');
   return { user: toApiUser(user), quota: readQuota(userId) };
+};
+
+/**
+ * `GET /api/me/realname` 的响应体（`docs/prd/spec/03-接口契约.md` §3.1、`modules/M08` §2.2）：
+ * `RealNameStatus` 只含 camelCase 的 `verified` / `verifiedAt` / `realName`——
+ * `users` 的三个列名（`real_name` / `id_hash` / `verified_at`）与证件号明文都不出现在响应里。
+ */
+export const readRealNameStatus = (userId: number): RealNameStatus => {
+  const user = users.findById(userId);
+  if (user === null) throw appError('UNAUTHENTICATED');
+  if (user.verifiedAt === null) return { verified: false, verifiedAt: null, realName: null };
+  return { verified: true, verifiedAt: user.verifiedAt, realName: user.realName };
+};
+
+/**
+ * `POST /api/me/realname`（`modules/M08` §2.2、`RN-04`）：**先**过 `IdVerifyProvider`（格式 + 唯一性，
+ * 失败抛 `INVALID_PARAM` 且不碰库），**再**在同一事务里写 `users` 三列与
+ * `audit_logs(action='auth.realname')`（`target='user:{id}'`）——两者要么都写、要么都不写。
+ */
+export const submitRealName = (userId: number, req: IdVerifyRequest): RealNameStatus => {
+  const verified = getIdVerifyProvider().verify(req);
+  return getDb().transaction(() => {
+    users.verifyRealName(userId, verified);
+    audit({ action: 'auth.realname', userId, target: `user:${userId}` }, verified.verifiedAt);
+    return { verified: true, verifiedAt: verified.verifiedAt, realName: verified.realName };
+  })();
 };

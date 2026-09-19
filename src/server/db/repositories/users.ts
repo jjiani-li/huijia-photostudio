@@ -70,6 +70,14 @@ export const findByEmail = (email: string): UserRecord | null => {
   return row === undefined ? null : toUser(row);
 };
 
+/** 按 `id_hash` 查（实名的唯一性校验，`docs/prd/modules/M08-账号历史与彻底删除.md` §2.2）。 */
+export const findByIdHash = (idHash: string): UserRecord | null => {
+  const row = getDb().prepare(`SELECT ${COLUMNS} FROM users WHERE id_hash = ?`).get(idHash) as
+    | UserRow
+    | undefined;
+  return row === undefined ? null : toUser(row);
+};
+
 export interface InsertUserInput {
   /** 归一化后的手机号（11 位纯数字）或邮箱（小写）；二者恰一个非空（`users` 的 CHECK）。 */
   phone: string | null;
@@ -106,5 +114,29 @@ export const touchLastLogin = (id: number, at: string): void => {
   getDb()
     .transaction(() =>
       getDb().prepare('UPDATE users SET last_login_at = @at WHERE id = @id').run({ id, at }),
+    )();
+};
+
+export interface VerifyRealNameInput {
+  realName: string;
+  /** `sha256(归一化证件号)`；**只写哈希**（`docs/prd/spec/01-领域模型与数据库.md` §3.1）。 */
+  idHash: string;
+  verifiedAt: string;
+}
+
+/**
+ * 实名落库（`docs/prd/modules/M08-账号历史与彻底删除.md` §2.2）：一次 UPDATE 写齐
+ * `real_name` / `id_hash` / `verified_at` 三列，`verified_at` 非空即已实名。
+ * 唯一性由 `auth/idVerify.ts` 在写入之前校验（`id_hash` 的 UNIQUE 索引是库级兜底）。
+ */
+export const verifyRealName = (id: number, input: VerifyRealNameInput): void => {
+  getDb()
+    .transaction(() =>
+      getDb()
+        .prepare(
+          `UPDATE users SET real_name = @realName, id_hash = @idHash, verified_at = @verifiedAt
+           WHERE id = @id`,
+        )
+        .run({ ...input, id }),
     )();
 };

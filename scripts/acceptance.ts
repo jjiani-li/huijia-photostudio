@@ -18,6 +18,7 @@ import { hardDeleteAnchor, insert as insertAnchor } from '../src/server/db/repos
 import { readEraSceneConfig } from '../src/server/db/repositories/config';
 import { findById as findGenerationById } from '../src/server/db/repositories/generations';
 import { insertPhoto } from '../src/server/db/repositories/photos';
+import { insertUser } from '../src/server/db/repositories/users';
 import { insert as insertReverseJob } from '../src/server/db/repositories/promptReverseJobs';
 import { getDay } from '../src/server/db/repositories/usage';
 import { getArk } from '../src/server/ark';
@@ -65,6 +66,7 @@ import { DELETE as deletePhotoRoute } from '../app/api/photos/[id]/route';
 import { GET as getPhotoFile } from '../app/api/photos/[id]/file/route';
 import { POST as postAuthCode } from '../app/api/auth/code/route';
 import { POST as postPhoto } from '../app/api/photos/route';
+import { GET as getRealName, POST as postRealName } from '../app/api/me/realname/route';
 
 interface CheckResult {
   ok: boolean;
@@ -358,6 +360,21 @@ const combosSatisfy = (predicate: (c: (typeof promptCases)[number]) => boolean):
  * 建行时登记清理（§3 的「自带清理」）。
  */
 let sid: string | null = null;
+/** 各用户名的 `sid` 明文（`tickets/T19` 起需要不止一个用户：未实名 / 已实名 / 占用者）。 */
+const sessionTokens = new Map<number, string>();
+const cookieFor = (userId: number): string => {
+  const cached = sessionTokens.get(userId);
+  if (cached !== undefined) return cached;
+  const token = createSession(userId).token;
+  sessionTokens.set(userId, token);
+  cleanups.push(() => getDb().prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token)));
+  return token;
+};
+const requestWithUser = (userId: number, url: string, init: RequestInit = {}): NextRequest => {
+  const headers = new Headers(init.headers);
+  headers.set('cookie', `${SID_COOKIE}=${cookieFor(userId)}`);
+  return new Request(url, { ...init, headers }) as unknown as NextRequest;
+};
 const authedRequest = (url: string, init: RequestInit = {}): NextRequest => {
   if (sid === null) {
     const token = createSession(DEV_USER).token;
@@ -692,8 +709,8 @@ const makeReadyAnchor = (): number => {
 };
 
 /** `createGeneration` 现为 `async`（prompt 阶段审核要 await 上游），本文件一律 `await`。 */
-const createFor = async (anchorId: number, count: number) =>
-  createGeneration({ userId: DEV_USER, anchorId, eraCode: 'E2', sceneId: 1, count });
+const createFor = async (anchorId: number, count: number, userId: number = DEV_USER) =>
+  createGeneration({ userId, anchorId, eraCode: 'E2', sceneId: 1, count });
 
 const codeOfCreate = async (fn: () => Promise<unknown>): Promise<string> => {
   try {
@@ -1877,6 +1894,199 @@ checks.push(
         expected:
           'queued → succeeded（`GET` 可见产物与状态）；另起一行 queued → failed（error_code / error_message 非空）；重复反推插新行',
         actual: `ids=${first}/${second} queued=${String(queuedRow.status)}→succeeded=${String(succeededRow.status)}（GET ${String(succeededDto.job.status)}） 产物=${typeof succeededRow.result_json}/${typeof succeededRow.result_prompt} failed=${String(failedRow.status)}/${String(failedRow.error_code)} 新行未动=${String(secondQueued.status)}`,
+      };
+    },
+  },
+);
+
+// ── `tickets/T19` 实名、用户资料与生成门槛（`docs/prd/spec/07-验收标准.md` §2.10：API-09、RN-01–RN-04）──
+// 进程内直调实名端点与 `createGeneration`；每个用例自带清理（用户行 + 会话 + 审计行）。
+
+/** 格式合法、校验位正确的四个样本（`11010519491231002X` 是 GB 11643 的公开样例）；每个用例各用一个，互不撞唯一性。 */
+const REALNAME_ID_A = '11010519491231002X';
+const REALNAME_ID_B = '310101199001011234';
+const REALNAME_ID_C = '440305198506200074';
+const REALNAME_ID_D = '330102198803150012';
+
+let unverifiedSeq = 0;
+
+/** 建一个**未实名**用户（`verified_at IS NULL`）并登记清理；手机号按序号保证唯一。 */
+const makeUnverifiedUser = (): number => {
+  unverifiedSeq += 1;
+  const user = insertUser({
+    phone: `1390001${String(1000 + unverifiedSeq).padStart(4, '0')}`,
+    email: null,
+    nickname: `验收用户${unverifiedSeq}`,
+    createdAt: nowIso(),
+  });
+  cleanups.push(() => {
+    getDb().prepare('DELETE FROM audit_logs WHERE user_id = ?').run(user.id);
+    getDb().prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+    getDb().prepare('DELETE FROM users WHERE id = ?').run(user.id);
+  });
+  return user.id;
+};
+
+const realnamePost = (userId: number, payload: unknown): Promise<Response> =>
+  postRealName(
+    requestWithUser(userId, 'http://localhost/api/me/realname', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    { params: Promise.resolve({}) },
+  );
+
+const realnameGet = (userId: number): Promise<Response> =>
+  getRealName(requestWithUser(userId, 'http://localhost/api/me/realname'), { params: Promise.resolve({}) });
+
+const realnameRow = (
+  userId: number,
+): { realName: string | null; idHash: string | null; verifiedAt: string | null; raw: string } => {
+  const row = getDb()
+    .prepare('SELECT real_name, id_hash, verified_at FROM users WHERE id = ?')
+    .get(userId) as { real_name: string | null; id_hash: string | null; verified_at: string | null };
+  return { realName: row.real_name, idHash: row.id_hash, verifiedAt: row.verified_at, raw: JSON.stringify(row) };
+};
+
+const realnameAuditCount = (userId: number): number =>
+  (getDb()
+    .prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'auth.realname' AND user_id = ?")
+    .get(userId) as { n: number }).n;
+
+const errorFields = async (res: Response): Promise<{ code: string; keys: string[] }> => {
+  const body = (await res.json()) as { error?: { code?: string; details?: { fields?: Record<string, unknown> } } };
+  return { code: body.error?.code ?? '', keys: Object.keys(body.error?.details?.fields ?? {}).sort() };
+};
+
+checks.push(
+  {
+    id: 'RN-01',
+    run: async () => {
+      const userId = makeUnverifiedUser();
+      const anchorId = makeReadyAnchor(); // 锚点本身可生成，门槛必须是实名
+      const before = count('generations');
+      const code = await codeOfCreate(() => createFor(anchorId, 2, userId));
+      const after = count('generations');
+      return {
+        ok: code === 'REALNAME_REQUIRED' && after === before,
+        expected: 'REALNAME_REQUIRED 且未产生 generations 行',
+        actual: `${code}，generations ${before}→${after}`,
+      };
+    },
+  },
+  {
+    id: 'RN-02',
+    run: async () => {
+      const userId = makeUnverifiedUser();
+      const created = await realnamePost(userId, { realName: '张三', idNumber: REALNAME_ID_A.toLowerCase() });
+      const row = realnameRow(userId);
+      const expectedHash = createHash('sha256').update(REALNAME_ID_A, 'utf8').digest('hex');
+      // 重提同一证件号（唯一性冲突被拒）后，已落的哈希逐字符不变 ⇒ 同一输入恒得同一哈希。
+      await realnamePost(userId, { realName: '张三', idNumber: REALNAME_ID_A });
+      const after = realnameRow(userId);
+      return {
+        ok:
+          created.status === 200 &&
+          row.idHash === expectedHash &&
+          row.idHash !== REALNAME_ID_A &&
+          !row.raw.includes(REALNAME_ID_A) &&
+          after.idHash === row.idHash &&
+          after.verifiedAt === row.verifiedAt,
+        expected: 'id_hash = sha256(证件号) 且非明文；重提后不变',
+        actual: `status=${created.status} hash=${row.idHash === expectedHash} 非明文=${!row.raw.includes(REALNAME_ID_A)} 重提后不变=${after.idHash === row.idHash}`,
+      };
+    },
+  },
+  {
+    id: 'RN-03',
+    run: async () => {
+      const owner = makeUnverifiedUser();
+      const other = makeUnverifiedUser();
+      const first = await realnamePost(owner, { realName: '张三', idNumber: REALNAME_ID_B });
+      const before = realnameRow(other);
+      const second = await realnamePost(other, { realName: '李四', idNumber: REALNAME_ID_B });
+      const fields = await errorFields(second);
+      return {
+        ok:
+          first.status === 200 &&
+          second.status === 400 &&
+          fields.code === 'INVALID_PARAM' &&
+          fields.keys.join(',') === 'idNumber' &&
+          realnameRow(other).raw === before.raw,
+        expected: '同一证件号二次实名 → 400 INVALID_PARAM（fields.idNumber），第二行不写',
+        actual: `首选=${first.status} 二次=${second.status}/${fields.code} fields=${fields.keys.join(',')} 第二行未变=${realnameRow(other).raw === before.raw}`,
+      };
+    },
+  },
+  {
+    id: 'RN-04',
+    run: async () => {
+      const userId = makeUnverifiedUser();
+      const before = realnameAuditCount(userId);
+      const ok = await realnamePost(userId, { realName: '张三', idNumber: REALNAME_ID_C });
+      const row = realnameRow(userId);
+      const auditCount = realnameAuditCount(userId);
+      const audit = getDb()
+        .prepare("SELECT target, created_at FROM audit_logs WHERE action = 'auth.realname' AND user_id = ?")
+        .get(userId) as { target: string; created_at: string } | undefined;
+      // 校验失败（格式 + 唯一性）都不写审计。
+      await realnamePost(userId, { realName: '张3', idNumber: '123' });
+      const failed = await realnamePost(userId, { realName: '张三', idNumber: REALNAME_ID_C });
+      const afterFailed = realnameAuditCount(userId);
+      return {
+        ok:
+          ok.status === 200 &&
+          before === 0 &&
+          auditCount === 1 &&
+          audit?.target === `user:${userId}` &&
+          audit?.created_at === row.verifiedAt &&
+          failed.status === 400 &&
+          afterFailed === 1,
+        expected: "成功后恰 1 行 auth.realname（target=user:{id}，与 verified_at 同时刻）；校验失败不写",
+        actual: `status=${ok.status} 审计 ${before}→${auditCount}（失败后仍 ${afterFailed}）target=${String(audit?.target)} 同时刻=${audit?.created_at === row.verifiedAt}`,
+      };
+    },
+  },
+  {
+    id: 'API-09',
+    run: async () => {
+      const userId = makeUnverifiedUser();
+      const fresh = await realnameGet(userId);
+      const freshBody = (await fresh.json()) as { realNameStatus: Record<string, unknown> };
+      const bad = await realnamePost(userId, { realName: '', idNumber: '' });
+      const badFields = await errorFields(bad);
+      const wrongFormat = await realnamePost(userId, { realName: '张三', idNumber: '123' });
+      const wrongFields = await errorFields(wrongFormat);
+      const ok = await realnamePost(userId, { realName: '张三', idNumber: REALNAME_ID_D });
+      const okRaw = JSON.stringify(await ok.json());
+      const after = await realnameGet(userId);
+      const afterBody = (await after.json()) as { realNameStatus: { verified?: boolean; realName?: string; verifiedAt?: string | null } };
+      const leaks = ['id_hash', 'real_name', 'verified_at', REALNAME_ID_D].filter((needle) =>
+        okRaw.includes(needle),
+      );
+      return {
+        ok:
+          fresh.status === 200 &&
+          Object.keys(freshBody).join(',') === 'realNameStatus' &&
+          Object.keys(freshBody.realNameStatus).sort().join(',') === 'realName,verified,verifiedAt' &&
+          freshBody.realNameStatus.verified === false &&
+          freshBody.realNameStatus.verifiedAt === null &&
+          freshBody.realNameStatus.realName === null &&
+          bad.status === 400 &&
+          badFields.code === 'INVALID_PARAM' &&
+          badFields.keys.join(',') === 'idNumber,realName' &&
+          wrongFormat.status === 400 &&
+          wrongFields.keys.join(',') === 'idNumber' &&
+          ok.status === 200 &&
+          after.status === 200 &&
+          afterBody.realNameStatus.verified === true &&
+          afterBody.realNameStatus.realName === '张三' &&
+          typeof afterBody.realNameStatus.verifiedAt === 'string' &&
+          leaks.length === 0,
+        expected:
+          'GET 未实名 {verified:false,verifiedAt:null,realName:null}；POST 成功 200 且响应无证件号明文与三个列名；空值 / 格式错 → 400 fields',
+        actual: `GET=${fresh.status} 键=${Object.keys(freshBody.realNameStatus).sort().join(',')} 空值=${bad.status}/${badFields.keys.join(',')} 格式=${wrongFormat.status}/${wrongFields.keys.join(',')} POST=${ok.status} 已实名=${String(afterBody.realNameStatus.verified)} 泄漏=${leaks.join(',') || '(无)'}`,
       };
     },
   },
