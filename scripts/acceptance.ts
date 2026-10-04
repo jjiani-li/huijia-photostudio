@@ -2162,7 +2162,7 @@ checks.push(
 // 生成 E4×S3 count=2 → 跑生成 handler → 历史可见 → 下载可读；自带清理见 §3。
 
 /** `E2E-01` 的输入样本（`docs/prd/spec/07-验收标准.md` §2.4；可用性已由 `PRE-09` 标定）。 */
-const E2E_SAMPLE_PHOTO = 'docs/老照片/1b26e45303c7321fa589d4525b43aa0.jpg';
+const E2E_SAMPLE_PHOTO = 'fixtures/images/sample-faded-photo.jpg';
 
 /** 删掉本次链路新建的 `photos` 行与磁盘文件（含上传阶段写过审核行的原图）。 */
 const purgePhotos = (ids: number[]): void => {

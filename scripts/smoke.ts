@@ -40,7 +40,7 @@ import { POST as postGeneration } from '../app/api/generations/route';
 import { GET as getGeneration } from '../app/api/generations/[id]/route';
 
 /** 链路输入样本（`docs/prd/spec/07-验收标准.md` §2.4 `E2E-01`；与 `scripts/acceptance.ts` 同一份素材）。 */
-const SAMPLE_PHOTO = 'docs/老照片/1b26e45303c7321fa589d4525b43aa0.jpg';
+const SAMPLE_PHOTO = 'fixtures/images/sample-faded-photo.jpg';
 
 /** 种子里的固定用户（已实名，`migrations/001-init.sql`）。 */
 const DEV_USER = 1;

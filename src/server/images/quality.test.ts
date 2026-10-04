@@ -45,9 +45,9 @@ describe('PRE-08 全黑图', () => {
   });
 });
 
-describe('PRE-09 真实留存照片可用', () => {
-  it('docs/老照片/1b26e45303c7321fa589d4525b43aa0.jpg → usable=true、readability >= 0.35', async () => {
-    const n = await normalize(await sharp('docs/老照片/1b26e45303c7321fa589d4525b43aa0.jpg').toBuffer());
+describe('PRE-09 陈旧样张可用', () => {
+  it('fixtures/images/sample-faded-photo.jpg → usable=true、readability >= 0.35', async () => {
+    const n = await normalize(await sharp('fixtures/images/sample-faded-photo.jpg').toBuffer());
     const q = scoreQuality(await buildAnalysisInput(n.buffer, n.width, n.height, n.resized));
     expect(q.usable).toBe(true);
     expect(q.readability).toBeGreaterThanOrEqual(0.35);
