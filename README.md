@@ -4,6 +4,16 @@
 
 > 这是一个**照片重建**产品，不是**老照片修复**产品。任何以「美化 / 修复」为目标的处理，都会在锚点生成之前把人物身份的证据换成 AI 的想象。这条取舍记录在 [`docs/adr/0001-f1-is-feature-extraction-not-restoration.md`](docs/adr/0001-f1-is-feature-extraction-not-restoration.md)。
 
+## 演示效果
+
+下列图片均由本项目的真实链路产出（Doubao 视觉理解提取身份锚点 → Doubao-Seedream 按【年代 × 场景】生成）。
+
+**演示人物为 AI 生成的虚构人物，不对应任何真实个体。** 同一个人的面部特征在三个不同的【年代 × 场景】之间保持了一致——这正是产品要解决的问题。
+
+| 输入｜80-90 年代 × 老式照相馆 | 生成｜50-70 年代 × 家庭客厅 | 生成｜2010-2020 年代 × 城市公园 |
+| :-: | :-: | :-: |
+| ![输入](docs/output/era-scene-E2-S1-old-studio.png) | ![E1-S4](docs/output/era-scene-E1-S4-living-room.png) | ![E4-S3](docs/output/era-scene-E4-S3-city-park.png) |
+
 ## 项目规模（均为可复现的静态统计）
 
 | 指标 | 数值 |
@@ -85,4 +95,5 @@ pnpm check              # typecheck + lint
 ## 说明
 
 - 仓库内不含任何真实密钥，`.env.example` 中 `ARK_API_KEY` 留空。
-- `docs/老照片/` 与 `docs/output/` 下的图片仅用于本地验证与效果确认。
+- `docs/output/` 下的图片用于效果确认与演示：`arkcli-*`、`seedream-lite-*` 是模型与 CLI 的能力测试图（笔记本、柴犬），`era-scene-*` 是本项目的生成产出。
+- **仓库内不含任何真实人物的照片**；所有演示人物均为 AI 生成的虚构人物。
